@@ -1,0 +1,10 @@
+id: image_render
+name: River Info
+summary: River information with candle plot
+
+desc: >
+  Displays information about the Yahara river
+
+author: Dave
+entry: image_render.star
+

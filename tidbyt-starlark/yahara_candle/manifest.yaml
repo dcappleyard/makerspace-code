@@ -1,0 +1,10 @@
+id: yahara-candle
+name: River Info
+summary: River information with candle plot
+
+desc: >
+  Displays information about the Yahara river
+
+author: Dave
+entry: yahara_candle.star
+

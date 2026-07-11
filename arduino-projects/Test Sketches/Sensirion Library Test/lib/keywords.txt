@@ -1,0 +1,9 @@
+Sensirion	KEYWORD1
+connect	KEYWORD2
+getResolution KEYWORD2
+setResolution KEYWORD2
+startMeasurementMode KEYWORD2
+getSensorValue KEYWORD2
+getCalibrationValue KEYWORD2
+setCalibrationValue KEYWORD2
+

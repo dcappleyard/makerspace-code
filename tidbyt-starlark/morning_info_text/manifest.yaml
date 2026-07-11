@@ -1,0 +1,11 @@
+id: morning-info
+name: Morning Info
+summary: Sunrise and morning weather display
+
+desc: >
+  Displays tomorrow sunrise time and forecasted weather
+  for a configurable hour.
+
+author: Dave
+entry: morning_info_text.star
+

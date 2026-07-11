@@ -1,0 +1,6 @@
+{
+    "programmer": "AVRISP mkII",
+    "board": "arduino:avr:uno",
+    "sketch": "Sensirion/i2c_Scanner/i2c_Scanner.ino",
+    "port": "/dev/tty.usbmodem14201"
+}
