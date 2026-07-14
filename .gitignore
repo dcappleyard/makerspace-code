@@ -1,0 +1,20 @@
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# PlatformIO (esp32-projects)
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Pixlet build artifacts (tidbyt-starlark)
+*.zip
+
+# Editor
+.history/

@@ -1,0 +1,9 @@
+id: usgs-tracker
+name: River Info
+summary: River gage, discharge, and temperature trends
+
+desc: >
+  Displays gage height, discharge, and temperature trends for Yahara river USGS sites.
+
+author: Dave
+entry: yahara.star

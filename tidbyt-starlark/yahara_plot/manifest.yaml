@@ -6,5 +6,5 @@ desc: >
   Displays information about the Yahara river
 
 author: Dave
-entry: image_render.star
+entry: yahara_plot.star
 
