@@ -1,54 +1,79 @@
 # panorama_photo_frame_w_counter
 
-A battery-powered panorama photo frame on the XIAO ePaper DIY Kit EE03 (10.3" panel).
-Same board/display as `../ee03-text-test`, `../test_bw_image_eink`, and
-`../wifi_counter_eink` — see `../hardware_info.md`. See `DESIGN.md` for the full
-design rationale and the decisions behind this project's architecture.
+A battery-powered panorama photo frame on the XIAO ePaper DIY Kit EE03 (10.3" panel)
+with a microSD card for image + metadata storage. Same board/display as
+`../ee03-text-test`, `../test_bw_image_eink`, and `../wifi_counter_eink`; the SD-card
+mod is the one proven out in `../eink_sd_test` — see `../hardware_info.md`. See
+`DESIGN.md` for the original design rationale and the SD-migration notes on top of it.
 
-Cycles between panorama photos on a timer (default every 2 hours), with one button
-forcing an immediate refresh/cycle and two other buttons adjusting a persistent
-counter that's shown as a text overlay but never drives image cycling itself.
-Deliberately has no WiFi, to save battery — this device spends almost all its time in
-deep sleep.
+Cycles between panorama photos on a timer (interval set by `frame_config.xml` on the
+card, default every 2 hours), with one button forcing an immediate refresh/cycle and
+two other buttons adjusting a persistent counter. Each photo has an `.xml` metadata
+sidecar whose fields are drawn as a caption beneath the image. Deliberately has no
+WiFi, to save battery — this device spends almost all its time in deep sleep.
 
-## One-time setup: `mklittlefs`
+## SD card layout
 
-This is the first project in `esp32-projects/` to use `board_build.filesystem`, and
-the `Seeed-Studio/platform-seeedboards` fork doesn't pull in a `mklittlefs` binary the
-way upstream `platform-espressif32` does — `pio run -t uploadfs`/`buildfs` will fail
-with `mklittlefs: command not found` (or, on Apple Silicon without Rosetta installed,
-`Bad CPU type in executable` if PlatformIO's own `tool-mklittlefs` package resolves to
-an x86_64-only build). Fix: `brew install mklittlefs` (arm64-native on macOS) and make
-sure `/opt/homebrew/bin` is on `PATH` before running `pio run -t uploadfs`.
+Format the card **FAT32** (see `../eink_sd_test/INSTALL.md`) and populate it like so:
+
+```
+/pictures/
+    harbor.bin      # display-ready packed image (from prepare_image.py)
+    harbor.xml      # its metadata sidecar (same base name)
+    dawn.bin
+    dawn.xml
+    ...
+/frame_config.xml   # <refresh_hours> (cycle interval) + <counter> (starting/live value)
+/counter_track.txt  # created/appended by the frame itself (counter log)
+```
+
+Photos are cycled in **filename order** of the `.bin` files. Each `<name>.bin` needs a
+matching `<name>.xml`; a missing sidecar just leaves the caption fields blank.
+`frame_config.xml` is optional — without it (or with a bad value) the frame falls back
+to a 2-hour interval and counter 0. A ready-to-copy starter lives in
+`sd_card_template/frame_config.xml`. Note the frame **rewrites `<counter>` in this
+file** on every counter-button press (see Buttons below).
 
 ## Workflow
 
-1. Produce source images with
-   `python-projects/grayscale_image_conversion/prepare_image.py` at its defaults
-   (4-bit depth, 1872x1404 — matches this panel's native resolution and already
-   produces the right panorama-on-white-canvas letterboxing with no extra flags).
-2. Pack them into raw binaries for LittleFS (unlike `../test_bw_image_eink`, images
-   here are **not** compiled into flash — see `DESIGN.md` for why):
+1. Prepare each photo (crop/backfill to the 6:17 strip, dither, pack, and capture its
+   metadata) with `python-projects/grayscale_image_conversion/prepare_image.py`:
    ```
-   pip install -r tools/requirements.txt   # first time only
-   python3 tools/pack_images.py ~/Pictures/test_1.png ~/Pictures/test_2.png
+   pip install -r requirements.txt   # first time only (Pillow, numpy)
+   python3 prepare_image.py ~/Pictures/harbor.tif --output-dir ./sd_pictures
    ```
-   This writes `data/images/img_00.bin`, `data/images/img_01.bin`, ... and
-   `data/images/manifest.txt` (display order + original filenames). Pass images in
-   the order you want them cycled.
-3. Upload the filesystem image, then the firmware:
+   It prompts for Artist / Date (YYYY-MM-DD) / Location / Title / Film and an output
+   filename, then writes `<name>.bin` (exactly 1,314,144 bytes), `<name>.xml`, and a
+   `<name>.png` preview into `--output-dir`. Any field can be left blank.
+2. Copy the `.bin` + `.xml` pairs into the card's `/pictures/` directory, and put a
+   `frame_config.xml` at the card root (see above). Re-copying is all it takes to
+   change or add photos — no reflash needed.
+3. Flash the firmware (only needed when the firmware itself changes):
    ```
-   pio run -t uploadfs
    pio run -t upload
    ```
-   Re-run step 3's `uploadfs` any time you re-run `pack_images.py` with different or
-   additional photos — the firmware itself doesn't need rebuilding for that.
-4. On first boot, open the serial monitor. The device will ask for the current time:
-   run `date +%s` on your computer, paste the number, and press Enter within 20
-   seconds (or just press Enter to skip and set it later). This is a **manual** clock
-   — there's no WiFi/NTP and no external RTC module, so it needs re-setting after any
-   genuine power loss (battery pull, not deep sleep — deep sleep keeps the clock
-   running).
+   There is no `uploadfs` step anymore — images live on the SD card, not in flash.
+4. On first boot, open the serial monitor. The device asks for the current time: run
+   `date +%s` on your computer, paste the number, and press Enter within the window
+   (or just press Enter to skip). This is a **manual** clock — no WiFi/NTP and no
+   external RTC, so it needs re-setting after any genuine power loss (battery pull,
+   not deep sleep — deep sleep keeps the clock running). See `clock_set_instructions.md`.
+
+## Clock & cold-boot behavior
+
+The frame **does not depend on the clock being set** — it never hangs or misbehaves
+without one. Photo cycling uses only *relative* intervals (each sleep is computed as
+`nextRefEpoch - now`, both from the same clock, so an unset/arbitrary clock still yields
+a correct interval), the caption shows no time, and a counter change with no clock is
+logged as `TIME_NOT_SET` instead of a timestamp.
+
+The one behavior to expect: on every **cold boot** (power loss / reset, not a
+deep-sleep wake) the device holds in the serial time-set window for up to
+`TIME_SET_WINDOW_MS` (**120 s**) *whether or not* you set the clock. So a battery-only
+cold boot with nothing attached to serial waits ~2 minutes before the first image
+appears. This is a deliberate delay, **not a hang** — press Enter (empty is fine) to
+skip it immediately, or paste a timestamp to set the clock. Timer/button wakes skip the
+window entirely.
 
 ## Buttons
 
@@ -56,59 +81,107 @@ Same GPIO pins as the other EE03 projects in this repo (2, 3, 5):
 
 | Button | Action |
 |---|---|
-| GPIO2 | Force an immediate refresh — advances to the next image and redraws the whole panel (including the text overlay) |
+| GPIO2 | Force an immediate refresh — advances to the next image and redraws the whole panel (including the caption) |
 | GPIO3 | Counter +1 |
 | GPIO5 | Counter -1 |
 
-Counter changes persist to NVS immediately, but **the display is not redrawn** for a
-counter press — the on-screen counter value only updates at the next scheduled or
-forced refresh. This avoids a multi-second full-panel flash on every button press,
-since 4bpp gray-mode images can't use the panel's fast partial refresh (see
-`../wifi_counter_eink/README.md`'s finding on that).
+On a counter press the frame reads `<counter>` from `/frame_config.xml`, adjusts it,
+**writes the new value back into that file**, and appends a timestamped line to
+`/counter_track.txt` (`YYYY-MM-DD HH:MM:SS <tab> +1/-1 <tab> newValue`; the timestamp is
+`TIME_NOT_SET` if the clock has never been set). So the counter lives on the SD card, not
+in flash — its boot value comes from `<counter>` and edits are persisted there. But **the
+display is not redrawn** for a counter press — the on-screen value only updates at the
+next scheduled or forced refresh. This avoids a multi-second full-panel flash on every
+button press, since 4bpp gray-mode images can't use the panel's fast partial refresh
+(see `../wifi_counter_eink/README.md`'s finding on that). If the SD card isn't present on
+a counter press, the change is skipped (logged over serial).
+
+## Text overlays
+
+Small-font lines sit in the white margins bracketing the photo, all in mid-grey
+(`TFT_GRAY_8`) with transparent backgrounds so the image shows through. Each line is
+nudged toward its panel edge (header up, caption down) by `EDGE_NUDGE` beyond the base
+`CAPTION_GAP`:
+
+- **Header line, above the photo** (font 2): the **counter value**, left-aligned. (The
+  top-right battery label is removed for now — `BATTERY_PLACEHOLDER` stays in
+  `src/main.cpp` for when real battery sensing is wired up.)
+- **Caption line, below the photo** (left and right runs bottom-aligned on a shared edge):
+  - **Left-aligned (font 2):** `Title · Location · Film`, joined by a hand-drawn centered dot
+  - **Right-aligned (font 4):** `Artist ‡ Date`, joined by a hand-drawn double dagger
+
+Empty fields are omitted from each run with no dangling separators. The separators are
+drawn by hand (`drawDotSep`/`drawDaggerSep`) because the built-in fonts only cover ASCII
+32–127 — there's no centered-dot or double-dagger glyph to set as text.
 
 ## Storage architecture
 
-Images live in a LittleFS partition, not compiled into firmware — see `DESIGN.md` for
-the full partition table and rationale. The short version: `../test_bw_image_eink`
-found that two full-panel images compiled into flash already reach 89.5% of the app
-partition, with no room left for a third image or for this project's extra logic
-(deep sleep, NVS, RTC). LittleFS keeps images off the app partition entirely, and
-reading them via `LittleFS.open()`/`File::read()` is the same code path a future SD
-card would use — swapping in a physical SD card later should mean changing the mount
-call, not rewriting the image-loading logic.
+Images and their metadata live on the SD card, read at runtime over the card's own SPI
+host (`SPIClass(FSPI)` → SPI2_HOST), which is physically separate from the EE03 panel's
+bus (SPI3_HOST) so the two never contend — the arrangement proven in `../eink_sd_test`.
+This replaces the project's original LittleFS image storage (`data/images/` +
+`tools/pack_images.py` + `pio run -t uploadfs`), which capped total images at the
+~6.9 MB filesystem partition and required a reflash to change photos. The nibble-packing
+that `pack_images.py` used to do is now folded into `prepare_image.py`, so it emits the
+display-ready `.bin` directly. The old `tools/` packer and `data/images/` payload are
+retired.
+
+## Swapping the SD card
+
+Removing/inserting the card while the frame is powered (battery or USB-C) is generally
+safe. The firmware only brings the SD bus up briefly at a wake event — `mountSd()` →
+read (refresh) or append (counter press) → `unmountSd()` — and holds no card handle
+across deep sleep, so for the vast majority of the time the card is fully unmounted and
+idle. Pulling it then is fine, and the frame remounts a reinserted card fresh on the
+next wake.
+
+- **The only risk window** is the sub-second moment the card is actively mounted:
+  during a refresh read, and especially during the `counter_track.txt` **write** after
+  a counter press (yanking mid-write is the classic way to corrupt a FAT filesystem).
+  So avoid pulling the card in the second or two right after a refresh fires or right
+  after pressing a counter button; when in doubt, swap it while it's idle (nearly
+  always).
+- **A missing card fails soft, never hangs**: a refresh with no card draws an "SD mount
+  failed…" screen and sleeps; a counter press with no card still persists the count to
+  NVS and just logs that it couldn't write the track file.
+- **Electrically** the Adafruit #4682 breakout is 3.3 V with no level shifting, and
+  SD-over-SPI is routinely hot-swapped — the practical hazard is filesystem corruption
+  from mid-write removal, not hardware damage.
 
 ## Power / sleep behavior
 
 The device does essentially all of its work once per boot, then calls
 `esp_deep_sleep_start()` — `loop()` is never actually reached. It wakes via:
-- **Timer**: the refresh interval (`REFRESH_INTERVAL_SEC` in `src/main.cpp`, default
+- **Timer**: the refresh interval (`<refresh_hours>` from `frame_config.xml`, default
   2 hours) — advances to the next image.
-- **GPIO2 (ext1 wake)**: same as a timer wake, but immediate.
-- **GPIO3/GPIO5 (ext1 wake)**: counter-only — adjusts and persists the counter, then
-  goes back to sleep for whatever time remains until the *original* scheduled
-  refresh (a counter press never resets or extends the refresh countdown).
+- **GPIO2 (ext1 wake)**: same as a timer wake, but immediate — advances to the next
+  image **and restarts the full interval**: the next automatic advance is a fresh N
+  hours from the moment you pressed the button, not from the previous schedule.
+- **GPIO3/GPIO5 (ext1 wake)**: counter-only — adjusts the counter in
+  `frame_config.xml`, logs it to the card, then goes back to sleep for whatever time
+  remains until the *original* scheduled refresh (a counter press never resets or
+  extends the countdown).
 
 ## Verified vs. unverified
 
-Nothing here has been run on physical hardware yet — this is a from-scratch build,
-not an iteration on a working version. Specific things to check first (see
-`DESIGN.md`'s Verification section for the full list):
+The host-side image/metadata pipeline (`prepare_image.py`) is verified: correct 6:17
+strip geometry, exact 1,314,144-byte `.bin`, well-formed `.xml`, and blank-field
+handling. The firmware **compiles** but has not been run on physical hardware in this
+configuration yet. Things to check first on-device:
 
-- **Partition table**: sums to exactly 8MB on paper; needs `pio run` to confirm no
-  overlap/build error, and to see actual app-partition fill % once compiled.
-- **`epaper.sleep()`/`begin(wake)`**: no sibling project in this repo has ever called
-  `sleep()` or a non-default `begin()` — every existing working example just calls
-  plain `epaper.begin()`. This project calls `epaper.sleep()` before deep sleep and
-  plain `epaper.begin()` (full init) on every wake; confirm this doesn't leave the
-  panel in a bad state.
-- **Sense-board deep-sleep current draw**: community reports (Seeed/Arduino forums)
-  suggest the XIAO ESP32-S3 **Sense** variant's camera/mic expansion board can draw
-  much more current in deep sleep than the base module's ~14µA spec, unless it's
-  explicitly powered down. No code here does that. If real battery-life measurements
-  come back high, the fallback is investigating a power-down sequence or physically
-  unplugging the stackable Sense expansion board.
-- **RTC across power loss**: expected to survive deep sleep but not a real power
-  cycle — needs confirming on hardware, along with the serial time-set window only
-  appearing on that cold-boot path (not on every timer/button wake).
-- **Simultaneous button presses**: GPIO2 is coded to take priority if pressed
-  alongside GPIO3/5, but this hasn't been exercised physically.
+- **SD read path**: card mounts, `/pictures` enumerates in filename order, each `.bin`
+  reads back exactly 1,314,144 bytes and renders via `pushImage`/`update()`, and the
+  matching `.xml` caption fields appear.
+- **`frame_config.xml`**: present value drives the sleep timer; missing/garbled falls
+  back to 2 h without crashing.
+- **Counter round-trip**: a counter press rewrites `<counter>` in `frame_config.xml`
+  (other config content preserved), appends a `+1`/`-1` line to `counter_track.txt`, and
+  the new value shows at the next refresh — the panel is *not* touched on the press itself.
+- **Caption overlay**: grey (`TFT_GRAY_8`) text; the hand-drawn centered dot and double
+  dagger separators land correctly and the font-2/font-4 runs bottom-align; tune
+  `DOT_SEP_W`/`DAGGER_SEP_W` and the dagger geometry on hardware if needed.
+- **`epaper.sleep()`/`begin()` across wakes**: no sibling exercised `sleep()` before
+  this project; confirm the panel redraws correctly after a sleep/wake cycle.
+- **RTC across power loss**: expected to survive deep sleep but not a real power cycle;
+  confirm the serial time-set window only appears on the cold-boot path.
+- **Deep-sleep current draw**: measure before trusting any battery-life estimate.

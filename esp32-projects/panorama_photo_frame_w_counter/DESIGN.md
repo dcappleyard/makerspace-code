@@ -5,6 +5,35 @@ copy of the plan that was approved before building this project, kept here so th
 design rationale lives alongside the code rather than only in a local Claude Code
 plan file.
 
+> **Update — SD-card storage + metadata (supersedes the LittleFS design below).**
+> Once the SD-card mod was proven working (`../eink_sd_test`), image storage moved
+> off LittleFS onto the SD card. What changed vs. the original plan:
+> - Images + a per-photo `.xml` metadata sidecar are now read from the card's
+>   `/pictures/` directory (mounted via `SPIClass(FSPI)` → SPI2_HOST, separate from the
+>   panel's SPI3_HOST). No `LittleFS`, no `manifest.txt`, no `pio run -t uploadfs`;
+>   photos cycle in `.bin` filename order. `tools/pack_images.py` and `data/images/`
+>   are retired — the nibble-packing is folded into `prepare_image.py`, which now also
+>   prompts for metadata and writes the `.xml` sidecar.
+> - `/frame_config.xml` holds runtime settings read on each refresh: `<refresh_hours>`
+>   (default 2 h, replacing the firmware `constexpr`) and `<counter>` — the counter now
+>   lives on the SD card, not NVS. Its boot value comes from `<counter>`, and each GPIO
+>   counter press rewrites that value in place (preserving the rest of the file).
+> - The photo metadata field formerly prompted as "Short description" is now **Title**
+>   (`<title>` in the per-photo sidecar; `prepare_image.py` prompts "Title").
+> - Text overlays (all mid-grey `TFT_GRAY_8`, transparent so the image shows through):
+>   header above the strip is font 2 with the counter left (a top-right battery
+>   placeholder was tried, then removed pending real battery sensing). Caption below
+>   is bottom-aligned with a font-2 left run
+>   `Title · Location · Film` (hand-drawn centered-dot separators) and a font-4 right run
+>   `Artist ‡ Date` (hand-drawn double dagger) — the built-in fonts are ASCII-32-127 only,
+>   so those separators are drawn as primitives.
+> - Every counter change appends a timestamped line to `/counter_track.txt` on the card.
+>
+> The photo geometry, deep-sleep/wake architecture, manual serial clock, and
+> deferred-counter-redraw behavior are unchanged from the design below (though the
+> counter moved out of the NVS schema into `frame_config.xml`). See `README.md` for the
+> current workflow.
+
 ## Context
 
 The user wants the first "real" (non-demo) e-ink project in `esp32-projects/`: a

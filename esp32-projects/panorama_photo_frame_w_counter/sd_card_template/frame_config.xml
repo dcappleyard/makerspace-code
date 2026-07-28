@@ -1,0 +1,9 @@
+<config>
+  <!-- How often the frame advances to the next photo, in whole hours.
+       Read from the SD card root at each refresh. Missing/invalid -> 2h. -->
+  <refresh_hours>2</refresh_hours>
+  <!-- The counter value shown top-left on the frame. This is the value the
+       counter starts at on boot; the frame rewrites it here every time a GPIO
+       counter button is pressed. Missing/blank -> 0. -->
+  <counter>0</counter>
+</config>
