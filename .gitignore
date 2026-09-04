@@ -18,3 +18,6 @@ venv/
 
 # Editor
 .history/
+
+# Generated image payload (prepare_image.py --output-dir)
+python-projects/grayscale_image_conversion/sd_pictures/
