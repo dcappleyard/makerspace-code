@@ -113,6 +113,10 @@ struct FrameState
 
 // Parsed from a photo's .xml sidecar. `location` is captured but not drawn on
 // its own line; `title` is the field the Python tool prompts for as "Title".
+// The color* members are per-corner text colors (gray levels 0-15) that
+// prepare_image.py picks for contrast against the image; they default to the
+// house grey so an older sidecar without them still renders. `colorTopRight`
+// is parsed for completeness but currently unused (no text top-right).
 struct PhotoMeta
 {
     String artist;
@@ -120,6 +124,10 @@ struct PhotoMeta
     String location;
     String title;
     String film;
+    uint16_t colorTopLeft = TFT_GRAY_8;
+    uint16_t colorTopRight = TFT_GRAY_8;
+    uint16_t colorBottomLeft = TFT_GRAY_8;
+    uint16_t colorBottomRight = TFT_GRAY_8;
 };
 
 // Parsed from /frame_config.xml. `counter` is the persistent, editable counter
@@ -224,6 +232,24 @@ String xmlUnescape(String s)
     return s;
 }
 
+// Parses a "TFT_GRAY_<n>" value (as written by prepare_image.py) into its gray
+// level 0-15 -- which is also the value used directly as a text color in
+// GRAY_LEVEL16 mode. Returns `fallback` for a missing/blank/unrecognized value.
+uint16_t parseGrayColor(const String &value, uint16_t fallback)
+{
+    const String prefix = "TFT_GRAY_";
+    if (!value.startsWith(prefix))
+    {
+        return fallback;
+    }
+    long n = value.substring(prefix.length()).toInt();
+    if (n < 0 || n > 15)
+    {
+        return fallback;
+    }
+    return (uint16_t)n;
+}
+
 // Scans /pictures for *.bin files (skipping macOS ._ shadow files), returning
 // their basenames sorted by filename == display order.
 std::vector<String> listPictures()
@@ -321,6 +347,10 @@ PhotoMeta loadPhotoMeta(const String &binName)
     meta.location = xmlUnescape(readTag(xml, "location"));
     meta.title = xmlUnescape(readTag(xml, "title"));
     meta.film = xmlUnescape(readTag(xml, "film"));
+    meta.colorTopLeft = parseGrayColor(readTag(xml, "text_color_top_left"), TFT_GRAY_8);
+    meta.colorTopRight = parseGrayColor(readTag(xml, "text_color_top_right"), TFT_GRAY_8);
+    meta.colorBottomLeft = parseGrayColor(readTag(xml, "text_color_bottom_left"), TFT_GRAY_8);
+    meta.colorBottomRight = parseGrayColor(readTag(xml, "text_color_bottom_right"), TFT_GRAY_8);
     return meta;
 }
 
@@ -594,7 +624,7 @@ void drawTextOverlay(const PhotoMeta &meta, int32_t counter)
     epaper.setTextFont(2);
     epaper.setTextSize(1);
     epaper.setTextDatum(TL_DATUM);
-    epaper.setTextColor(TFT_GRAY_8); // grey, transparent background
+    epaper.setTextColor(meta.colorTopLeft); // per-corner color, transparent bg
     epaper.drawString(String((long)counter), margin, TITLE_Y);
 
     // --- Caption line (bottom-aligned; left font 2, right font 4) ---
@@ -606,7 +636,7 @@ void drawTextOverlay(const PhotoMeta &meta, int32_t counter)
     if (meta.film.length())
         leftSegs.push_back(meta.film);
     drawSeparatedLine(leftSegs, true, margin, CAPTION_BOTTOM_Y,
-                      2, FONT2_HEIGHT, TFT_GRAY_8, DOT_SEP_W, drawDotSep);
+                      2, FONT2_HEIGHT, meta.colorBottomLeft, DOT_SEP_W, drawDotSep);
 
     std::vector<String> rightSegs;
     if (meta.artist.length())
@@ -614,7 +644,7 @@ void drawTextOverlay(const PhotoMeta &meta, int32_t counter)
     if (meta.date.length())
         rightSegs.push_back(meta.date);
     drawSeparatedLine(rightSegs, false, rightX, CAPTION_BOTTOM_Y,
-                      4, FONT4_HEIGHT, TFT_GRAY_8, DAGGER_SEP_W, drawDaggerSep);
+                      4, FONT4_HEIGHT, meta.colorBottomRight, DAGGER_SEP_W, drawDaggerSep);
 #endif
 }
 

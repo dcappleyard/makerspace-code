@@ -63,6 +63,22 @@ REGION_TOP = (DEFAULT_HEIGHT - REGION_HEIGHT) // 2  # 371
 # firmware's readTag() looks them up by name.
 METADATA_FIELDS = ("artist", "date", "location", "title", "film")
 
+# Computed (not prompted) per-corner text colors, appended after the metadata
+# fields. Each is a "TFT_GRAY_<n>" string chosen for contrast against the image
+# content in that corner of the photo strip; the firmware parses out the number.
+COLOR_FIELDS = (
+    "text_color_top_left",
+    "text_color_top_right",
+    "text_color_bottom_left",
+    "text_color_bottom_right",
+)
+ALL_SIDECAR_FIELDS = METADATA_FIELDS + COLOR_FIELDS
+
+# Size of the corner sample used to pick each text color: ~200 px wide x ~30 px
+# high, taken from the corners of the photo strip (the cropped image region).
+COLOR_SAMPLE_WIDTH = 200
+COLOR_SAMPLE_HEIGHT = 30
+
 
 HIGH_BIT_DEPTH_MODES = {
     "I;16",
@@ -450,13 +466,59 @@ def pack_image(image: Image.Image) -> bytes:
     return packed.tobytes()
 
 
+def gray_color_for_mean(mean: float) -> str:
+    """
+    Map a region's mean 4-bit gray level (0-15) to a text color chosen for
+    contrast against it, per the frame's convention:
+        0-4   -> TFT_GRAY_12   (light text on a dark region)
+        5-7   -> TFT_GRAY_15   (white)
+        8-10  -> TFT_GRAY_0    (black)
+        11-15 -> TFT_GRAY_3    (dark text on a light region)
+    """
+    if mean < 4.5:
+        return "TFT_GRAY_12"
+    if mean < 7.5:
+        return "TFT_GRAY_15"
+    if mean < 10.5:
+        return "TFT_GRAY_0"
+    return "TFT_GRAY_3"
+
+
+def compute_text_colors(
+    quantized: Image.Image,
+    region_top: int,
+    region_height: int,
+    canvas_width: int,
+) -> dict[str, str]:
+    """
+    Sample the four corners of the photo strip and pick a contrasting text color
+    for each, matching where the firmware draws the corresponding text.
+    """
+    indices = np.asarray(quantized)  # 'P' mode -> 4-bit palette indices (0-15)
+    region_bottom = region_top + region_height
+    sw = COLOR_SAMPLE_WIDTH
+    sh = COLOR_SAMPLE_HEIGHT
+    w = canvas_width
+
+    def corner_mean(x0: int, y0: int) -> float:
+        block = indices[y0:y0 + sh, x0:x0 + sw]
+        return float(block.mean()) if block.size else 15.0
+
+    return {
+        "text_color_top_left": gray_color_for_mean(corner_mean(0, region_top)),
+        "text_color_top_right": gray_color_for_mean(corner_mean(w - sw, region_top)),
+        "text_color_bottom_left": gray_color_for_mean(corner_mean(0, region_bottom - sh)),
+        "text_color_bottom_right": gray_color_for_mean(corner_mean(w - sw, region_bottom - sh)),
+    }
+
+
 def build_sidecar_xml(metadata: dict[str, str]) -> str:
     """
     Build the flat metadata sidecar. Empty fields are written as empty
     elements (the firmware renders them as blank). Values are XML-escaped.
     """
     lines = ["<meta>"]
-    for field in METADATA_FIELDS:
+    for field in ALL_SIDECAR_FIELDS:
         value = escape(metadata.get(field, ""))
         lines.append(f"  <{field}>{value}</{field}>")
     lines.append("</meta>")
@@ -699,6 +761,10 @@ def run(
             region_height=region_height,
             region_top=region_top,
             fill=fill,
+        )
+
+        metadata.update(
+            compute_text_colors(quantized, region_top, region_height, DEFAULT_WIDTH)
         )
 
         write_outputs(

@@ -20,7 +20,9 @@ plan file.
 >   counter press rewrites that value in place (preserving the rest of the file).
 > - The photo metadata field formerly prompted as "Short description" is now **Title**
 >   (`<title>` in the per-photo sidecar; `prepare_image.py` prompts "Title").
-> - Text overlays (all mid-grey `TFT_GRAY_8`, transparent so the image shows through):
+> - Text overlays (transparent so the image shows through; per-corner colors are
+>   data-driven — `prepare_image.py` samples each strip corner and writes a contrasting
+>   `TFT_GRAY_*` into the sidecar, defaulting to grey `TFT_GRAY_8` when absent):
 >   header above the strip is font 2 with the counter left (a top-right battery
 >   placeholder was tried, then removed pending real battery sensing). Caption below
 >   is bottom-aligned with a font-2 left run

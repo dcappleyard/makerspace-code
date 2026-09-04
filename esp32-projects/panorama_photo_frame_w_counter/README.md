@@ -98,10 +98,9 @@ a counter press, the change is skipped (logged over serial).
 
 ## Text overlays
 
-Small-font lines sit in the white margins bracketing the photo, all in mid-grey
-(`TFT_GRAY_8`) with transparent backgrounds so the image shows through. Each line is
-nudged toward its panel edge (header up, caption down) by `EDGE_NUDGE` beyond the base
-`CAPTION_GAP`:
+Small-font lines sit in the white margins bracketing the photo, with transparent
+backgrounds so the image shows through. Each line is nudged toward its panel edge
+(header up, caption down) by `EDGE_NUDGE` beyond the base `CAPTION_GAP`:
 
 - **Header line, above the photo** (font 2): the **counter value**, left-aligned. (The
   top-right battery label is removed for now — `BATTERY_PLACEHOLDER` stays in
@@ -113,6 +112,18 @@ nudged toward its panel edge (header up, caption down) by `EDGE_NUDGE` beyond th
 Empty fields are omitted from each run with no dangling separators. The separators are
 drawn by hand (`drawDotSep`/`drawDaggerSep`) because the built-in fonts only cover ASCII
 32–127 — there's no centered-dot or double-dagger glyph to set as text.
+
+**Per-corner text color (data-driven).** Instead of a fixed grey, each text block's color
+comes from the sidecar. `prepare_image.py` samples a ~200×30 px patch in the matching
+corner of the photo strip, takes the mean 4-bit gray level, and writes a contrasting
+`TFT_GRAY_*` value: `text_color_top_left` (counter), `text_color_bottom_left`,
+`text_color_bottom_right`, plus `text_color_top_right` (generated for future use). The
+firmware parses these per photo (`parseGrayColor`) and falls back to `TFT_GRAY_8` if a
+field is missing. The mapping (mean → color) lives in `gray_color_for_mean` in the Python
+tool. Note the color is picked from the *image* corner while the text is drawn in the
+adjacent white margin, so a very dark image corner yields light text that reads faintly
+on the white margin — adjust the mapping (or move the text onto the image) if that
+matters for your photos.
 
 ## Storage architecture
 
