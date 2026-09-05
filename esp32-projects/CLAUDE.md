@@ -20,4 +20,10 @@ The user works in VS Code in parallel with Claude Code, using the PlatformIO ext
 
 ## Deep sleep + serial uploads
 
+**Applies to `panorama_photo_frame_w_counter/` only, not `panorama_photo_frame_web/`.**
+The web version never sleeps, so its USB-Serial/JTAG port stays enumerated and
+none of the timing gymnastics below are needed there — `pio device list`,
+`upload`, and `monitor` behave normally. It also has no filesystem partition, so
+there is no `uploadfs` step at all.
+
 For any project that puts the board into deep sleep (see `panorama_photo_frame_w_counter/`): the XIAO ESP32-S3's native USB-Serial/JTAG interface only enumerates while the chip is awake, so `pio device list`/`upload`/`uploadfs` all lose the port entirely once it's asleep — it's not a fault, the device just isn't there yet. `pio`'s own startup overhead (dependency scanning, building any filesystem image) eats into the time between pressing reset and esptool actually opening the port, so a short "wake and wait for serial input" window on boot (e.g. before the first deep sleep) can expire before an upload command even gets that far, especially on the first `uploadfs` after a fresh build. Favor a generous window (60-120s) on any such boot-time serial prompt while actively iterating on uploads; it's cheap to shorten once the device is verified and no longer being reflashed frequently.
