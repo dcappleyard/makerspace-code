@@ -66,10 +66,15 @@ const char PAGE_HEAD[] PROGMEM =
     "button{padding:.4rem .8rem;font-size:.9rem}"
     "form{display:inline}"
     ".k{color:#666;padding-right:.6rem}"
+    ".win{margin:.6rem 0 1rem}"
+    ".win a{display:inline-block;padding:.35rem .7rem;margin:0 .4rem .4rem 0;"
+    "border:1px solid #ccc;border-radius:4px;text-decoration:none;color:#333}"
+    ".win a.on{background:#333;color:#fff;border-color:#333}"
+    "svg{width:100%;height:auto;max-width:100%}"
     "</style></head><body>"
     "<nav><a href='/'>Status</a><a href='/photos'>Photos</a>"
-    "<a href='/history'>History</a><a href='/upload'>Upload</a>"
-    "<a href='/clock'>Clock</a></nav>";
+    "<a href='/history'>History Data</a><a href='/history/plot'>History Plot</a>"
+    "<a href='/upload'>Upload</a><a href='/clock'>Clock</a></nav>";
 
 const char PAGE_FOOT[] PROGMEM = "</body></html>";
 
@@ -986,6 +991,348 @@ void handleHistory()
     server.sendContent("");
 }
 
+// -----------------------------------------------------------------------------
+// History plot (/history/plot)
+//
+// Server-rendered inline SVG, no JavaScript and no external chart library: the
+// frame can't count on the browser having internet, and a CDN dependency would
+// make a local device's page fail in exactly the situation you'd want it most.
+//
+// The log is scanned twice (seek(0) between passes) rather than buffered: pass
+// one finds the count and the axis ranges, pass two emits a decimated polyline.
+// That keeps peak heap flat no matter how large the file grows -- the same
+// reason the data page reads only a window from the end.
+// -----------------------------------------------------------------------------
+
+// ~900px of plot width; more points than this are invisible anyway.
+constexpr int MAX_PLOT_POINTS = 400;
+
+// Plot geometry, in viewBox units.
+constexpr int PLOT_W = 920, PLOT_H = 380;
+constexpr int PAD_L = 62, PAD_R = 20, PAD_T = 18, PAD_B = 42;
+constexpr int AREA_W = PLOT_W - PAD_L - PAD_R;
+constexpr int AREA_H = PLOT_H - PAD_T - PAD_B;
+
+struct PlotWindow
+{
+    const char *label;
+    long days; // 0 == everything
+};
+
+const PlotWindow PLOT_WINDOWS[] = {
+    {"1 month", 30}, {"3 months", 90}, {"6 months", 180}, {"1 year", 365}, {"Full", 0},
+};
+constexpr size_t PLOT_WINDOW_COUNT = sizeof(PLOT_WINDOWS) / sizeof(PLOT_WINDOWS[0]);
+
+// Parses the "YYYY-MM-DD HH:MM:SS" stamp appendCounterTrack() writes. Returns 0
+// for anything else, which is how TIME_NOT_SET lines get skipped. mktime()
+// interprets it as local time, matching the localtime_r() that wrote it -- so
+// the round trip is consistent even across a DST boundary.
+time_t parseTrackTimestamp(const String &field)
+{
+    int y, mo, d, h, mi, se;
+    if (sscanf(field.c_str(), "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se) != 6)
+    {
+        return 0;
+    }
+    struct tm tmv;
+    memset(&tmv, 0, sizeof(tmv));
+    tmv.tm_year = y - 1900;
+    tmv.tm_mon = mo - 1;
+    tmv.tm_mday = d;
+    tmv.tm_hour = h;
+    tmv.tm_min = mi;
+    tmv.tm_sec = se;
+    tmv.tm_isdst = -1; // let libc resolve DST for this local time
+    return mktime(&tmv);
+}
+
+// Splits one log line into its timestamp and counter value. Returns false for
+// blank, malformed, or TIME_NOT_SET lines.
+bool parseTrackLine(const String &line, time_t *tOut, int32_t *vOut)
+{
+    int t1 = line.indexOf('\t');
+    if (t1 < 0)
+        return false;
+    int t2 = line.indexOf('\t', t1 + 1);
+    if (t2 < 0)
+        return false;
+
+    time_t t = parseTrackTimestamp(line.substring(0, t1));
+    if (t <= 0)
+        return false;
+
+    *tOut = t;
+    *vOut = (int32_t)line.substring(t2 + 1).toInt();
+    return true;
+}
+
+String shortDate(time_t t)
+{
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    char buf[16];
+    strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
+    return String(buf);
+}
+
+void handleHistoryPlot()
+{
+    if (!requireAuth())
+        return;
+
+    // Which window? Defaults to Full so a new frame shows everything it has.
+    long days = 0;
+    if (server.hasArg("w"))
+    {
+        long requested = server.arg("w").toInt();
+        for (size_t i = 0; i < PLOT_WINDOW_COUNT; i++)
+        {
+            if (PLOT_WINDOWS[i].days == requested)
+            {
+                days = requested;
+                break;
+            }
+        }
+    }
+
+    // A window is measured back from now, so it needs a trustworthy clock. With
+    // an unset clock, silently showing "the last 30 days" of nothing would be
+    // worse than showing everything and saying why.
+    bool windowUsable = clockValid();
+    time_t cutoff = 0;
+    if (days > 0 && windowUsable)
+    {
+        cutoff = time(nullptr) - (time_t)days * 86400;
+    }
+
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+    server.sendContent_P(PAGE_HEAD);
+    server.sendContent("<h1>Counter over time</h1>");
+
+    String nav = "<div class='win'>";
+    for (size_t i = 0; i < PLOT_WINDOW_COUNT; i++)
+    {
+        nav += "<a href='/history/plot?w=" + String(PLOT_WINDOWS[i].days) + "'";
+        nav += (PLOT_WINDOWS[i].days == days) ? " class='on'" : "";
+        nav += ">";
+        nav += PLOT_WINDOWS[i].label;
+        nav += "</a>";
+    }
+    nav += "</div>";
+    server.sendContent(nav);
+
+    if (days > 0 && !windowUsable)
+    {
+        server.sendContent("<p class='k'>The clock isn&#39;t set, so a time window "
+                           "can&#39;t be measured &mdash; showing everything. "
+                           "<a href='/clock'>Set the clock</a>.</p>");
+    }
+
+    if (!sdIsMounted())
+    {
+        server.sendContent("<p>No SD card mounted.</p>");
+        server.sendContent_P(PAGE_FOOT);
+        server.sendContent("");
+        return;
+    }
+
+    File f = SD.open(COUNTER_TRACK_PATH, FILE_READ);
+    if (!f)
+    {
+        server.sendContent("<p>No counter changes recorded yet.</p>");
+        server.sendContent_P(PAGE_FOOT);
+        server.sendContent("");
+        return;
+    }
+
+    // --- Pass 1: count and find the axis ranges ---
+    long count = 0, undated = 0;
+    time_t tMin = 0, tMax = 0;
+    int32_t vMin = 0, vMax = 0;
+
+    while (f.available())
+    {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
+
+        time_t t;
+        int32_t v;
+        if (!parseTrackLine(line, &t, &v))
+        {
+            undated++;
+            continue;
+        }
+        if (cutoff && t < cutoff)
+            continue;
+
+        if (count == 0)
+        {
+            tMin = tMax = t;
+            vMin = vMax = v;
+        }
+        else
+        {
+            if (t < tMin)
+                tMin = t;
+            if (t > tMax)
+                tMax = t;
+            if (v < vMin)
+                vMin = v;
+            if (v > vMax)
+                vMax = v;
+        }
+        count++;
+    }
+
+    if (count == 0)
+    {
+        f.close();
+        String msg = "<p>Nothing to plot in this window.";
+        if (undated > 0)
+        {
+            msg += " (" + String(undated) + " entr" + (undated == 1 ? "y was" : "ies were") +
+                   " logged with no clock set, so they can&#39;t be placed on a "
+                   "time axis &mdash; see <a href='/history'>History Data</a>.)";
+        }
+        msg += "</p>";
+        server.sendContent(msg);
+        server.sendContent_P(PAGE_FOOT);
+        server.sendContent("");
+        return;
+    }
+
+    // Degenerate ranges would divide by zero; pad them into something drawable.
+    if (vMax == vMin)
+    {
+        vMax = vMin + 1;
+        vMin -= 1;
+    }
+    bool singleInstant = (tMax == tMin);
+
+    long stride = (count > MAX_PLOT_POINTS) ? (count / MAX_PLOT_POINTS) : 1;
+
+    // --- Pass 2: emit the polyline ---
+    f.seek(0);
+
+    String pts;
+    pts.reserve(MAX_PLOT_POINTS * 14 + 64);
+    long idx = 0, plotted = 0;
+    int32_t firstV = 0, lastV = 0;
+
+    while (f.available())
+    {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
+
+        time_t t;
+        int32_t v;
+        if (!parseTrackLine(line, &t, &v))
+            continue;
+        if (cutoff && t < cutoff)
+            continue;
+
+        bool keep = (idx % stride == 0) || (idx == count - 1); // always keep the last
+        if (keep)
+        {
+            int x = singleInstant
+                        ? (PAD_L + AREA_W / 2)
+                        : (int)(PAD_L + (double)(t - tMin) * AREA_W / (double)(tMax - tMin));
+            int y = (int)(PAD_T + AREA_H -
+                          (double)(v - vMin) * AREA_H / (double)(vMax - vMin));
+            pts += String(x) + "," + String(y) + " ";
+            if (plotted == 0)
+                firstV = v;
+            lastV = v;
+            plotted++;
+        }
+        idx++;
+    }
+    f.close();
+
+    // --- SVG ---
+    String svg;
+    svg.reserve(2048);
+    svg += "<svg viewBox='0 0 " + String(PLOT_W) + " " + String(PLOT_H) +
+           "' preserveAspectRatio='xMidYMid meet' role='img'>";
+
+    // Horizontal gridlines + y labels.
+    for (int i = 0; i <= 4; i++)
+    {
+        int y = PAD_T + (AREA_H * i) / 4;
+        long v = vMax - (long)(vMax - vMin) * i / 4;
+        svg += "<line x1='" + String(PAD_L) + "' y1='" + String(y) + "' x2='" +
+               String(PLOT_W - PAD_R) + "' y2='" + String(y) +
+               "' stroke='#e5e5e5' stroke-width='1'/>";
+        svg += "<text x='" + String(PAD_L - 8) + "' y='" + String(y + 4) +
+               "' text-anchor='end' font-size='12' fill='#666'>" + String(v) + "</text>";
+    }
+
+    // Axes.
+    svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T) + "' x2='" +
+           String(PAD_L) + "' y2='" + String(PAD_T + AREA_H) +
+           "' stroke='#999' stroke-width='1'/>";
+    svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T + AREA_H) + "' x2='" +
+           String(PLOT_W - PAD_R) + "' y2='" + String(PAD_T + AREA_H) +
+           "' stroke='#999' stroke-width='1'/>";
+
+    // X labels: start, middle, end.
+    const char *anchors[3] = {"start", "middle", "end"};
+    for (int i = 0; i <= 2; i++)
+    {
+        int x = PAD_L + (AREA_W * i) / 2;
+        time_t t = singleInstant ? tMin : (tMin + (time_t)((double)(tMax - tMin) * i / 2.0));
+        svg += "<text x='" + String(x) + "' y='" + String(PAD_T + AREA_H + 20) +
+               "' text-anchor='" + anchors[i] + "' font-size='12' fill='#666'>" +
+               shortDate(t) + "</text>";
+    }
+
+    if (plotted == 1)
+    {
+        // A polyline of one point draws nothing -- mark it so the page isn't blank.
+        int sp = pts.indexOf(',');
+        int se = pts.indexOf(' ');
+        if (sp > 0 && se > sp)
+        {
+            svg += "<circle cx='" + pts.substring(0, sp) + "' cy='" +
+                   pts.substring(sp + 1, se) + "' r='4' fill='#333'/>";
+        }
+    }
+    else
+    {
+        svg += "<polyline fill='none' stroke='#333' stroke-width='2' "
+               "stroke-linejoin='round' stroke-linecap='round' points='" +
+               pts + "'/>";
+    }
+
+    svg += "</svg>";
+    server.sendContent(svg);
+
+    String note = "<p class='k'>" + String(count) + " entr" +
+                  String(count == 1 ? "y" : "ies") + " from " + shortDate(tMin) + " to " +
+                  shortDate(tMax) + " &middot; counter " + String((long)firstV) +
+                  " &rarr; " + String((long)lastV);
+    if (stride > 1)
+    {
+        note += " &middot; showing 1 point in every " + String(stride);
+    }
+    if (undated > 0)
+    {
+        note += " &middot; " + String(undated) + " undated entr" +
+                String(undated == 1 ? "y" : "ies") + " omitted";
+    }
+    note += "</p>";
+    server.sendContent(note);
+
+    server.sendContent_P(PAGE_FOOT);
+    server.sendContent("");
+}
+
 void handleHistoryRaw()
 {
     if (!requireAuth())
@@ -1021,6 +1368,7 @@ void setupWebServer()
     server.on("/status.json", HTTP_GET, handleStatusJson);
     server.on("/photos", HTTP_GET, handlePhotos);
     server.on("/history", HTTP_GET, handleHistory);
+    server.on("/history/plot", HTTP_GET, handleHistoryPlot);
     server.on("/history/raw", HTTP_GET, handleHistoryRaw);
 
     // State-changing routes are POST-only and answer with a 303 redirect.

@@ -63,7 +63,8 @@ There's no `uploadfs` step and no serial clock ritual — both are gone.
 |---|---|
 | `/` | Status: current photo, counter, time to next refresh, clock, WiFi, SD free space, uptime, heap. Buttons for next/redraw, the counter row, and card eject. |
 | `/photos` | Every `.bin` on the card with its caption metadata, the current one marked, and a **Show** button to jump straight to any of them. |
-| `/history` | The counter log, newest first. |
+| `/history` | **History Data** &mdash; the counter log as a table, newest first. |
+| `/history/plot` | **History Plot** &mdash; counter value over time, with 1/3/6-month, 1-year and full windows. |
 | `/upload` | Upload a `.bin` + `.xml` pair. |
 | `/clock` | Local time, timezone, and manual clock override. |
 | `/status.json` | The same status as `/`, machine-readable. |
@@ -172,6 +173,28 @@ shared with the network stack. When entries are older than that window the page
 says so and links to **view the whole file**, which streams
 `/counter_track.txt` verbatim as plain text at `/history/raw` without ever
 holding it in RAM.
+
+### History Plot
+
+Counter value plotted against date, with window buttons for 1 month, 3 months,
+6 months, 1 year, and full history (full is the default).
+
+The chart is **server-rendered inline SVG** &mdash; no JavaScript, no charting
+library, nothing fetched from a CDN. A local device whose page only works when
+the browser has internet access would fail in exactly the situation you'd most
+want it.
+
+The log is scanned twice rather than buffered: the first pass counts entries and
+finds the axis ranges, the second emits a decimated polyline (capped at 400
+points, which is more than a ~900 px wide plot can show anyway). Peak memory
+stays flat however large the log grows, which is the same reason the data page
+reads only a window from the end.
+
+Entries logged as `TIME_NOT_SET` can't be placed on a time axis, so they're
+skipped and the count of them is reported under the chart &mdash; they're still
+visible on History Data. A time window is measured back from *now*, so it needs
+a valid clock; with an unset clock the page shows everything and says why rather
+than silently plotting an empty month.
 
 ## Refresh timing and responsiveness
 
@@ -296,6 +319,10 @@ bytes) and 15.2% RAM**. The host-side image/metadata pipeline
 - **Counter steps**: each of the ten buttons moves the counter by its own
   amount and logs one line with that step (`+5`, `-3`, ...); `POST /counter`
   with `d=0` or `d=9` is rejected with a 400.
+- **History Plot**: the line matches the values on History Data, the window
+  buttons narrow the range, and the axis labels read correctly. The plot
+  geometry (bounds, axis inversion, decimation, flat-value and single-timestamp
+  edge cases) was checked off-device, but not the rendered result.
 - **Clock**: correct Central time within ~30 s of boot — in summer the offset
   must be **−05:00 (CDT)**, which is what actually tests the DST rules.
 - **Card eject/reinsert**, and a scheduled refresh with no card (must skip
