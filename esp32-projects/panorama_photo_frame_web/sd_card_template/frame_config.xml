@@ -1,0 +1,14 @@
+<config>
+  <!-- How often the frame advances to the next photo, in whole hours.
+       Re-read from the card at each refresh, so an edit takes effect without
+       a reboot. Clamped to 1-168; missing/invalid -> 2h. -->
+  <refresh_hours>2</refresh_hours>
+  <!-- The counter value shown top-left on the frame. This is the value the
+       counter starts at on boot; the frame rewrites it here every time a
+       counter button is pressed or the web +1/-1 is used. Missing/blank -> 0. -->
+  <counter>0</counter>
+  <!-- POSIX TZ string used to render local time. Default is US Central with
+       US DST rules (Madison, WI). Editable from the web UI's Clock page,
+       which writes the new value back here. Missing -> CST6CDT,M3.2.0,M11.1.0 -->
+  <timezone>CST6CDT,M3.2.0,M11.1.0</timezone>
+</config>
