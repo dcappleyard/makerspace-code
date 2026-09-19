@@ -1,0 +1,4 @@
+# Subtitle files are third-party content and are not redistributed with this
+# repo -- drop your own .srt files in examples/ and they stay untracked.
+examples/*
+!examples/.gitkeep

@@ -1,3 +1,3 @@
 # python-projects
 
-Standalone Python scripts (plus one bash utility) for image prep and USGS water-data monitoring. See [CLAUDE.md](CLAUDE.md) for conventions.
+Standalone Python scripts (plus one bash utility) for image prep, USGS water-data monitoring, and subtitle playback. See [CLAUDE.md](CLAUDE.md) for conventions.
