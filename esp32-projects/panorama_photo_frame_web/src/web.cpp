@@ -1076,14 +1076,41 @@ bool parseTrackLine(const String &line, time_t *tOut, int32_t *stepOut, int32_t 
     return true;
 }
 
-// Calendar day in local time, as an ordered, unique key. Only ever compared for
-// equality/ordering, never subtracted, so the gaps between month keys are fine.
-long dayKeyFor(time_t t)
+// Days since 1970-01-01 for a civil date (Howard Hinnant's days_from_civil).
+// Exact for any proleptic Gregorian date and, unlike a YYYYMMDD key, CONTIGUOUS
+// -- which the calendar-spaced axis needs, since it subtracts day numbers to
+// find how far apart two dates are.
+long daysFromCivil(int y, unsigned m, unsigned d)
+{
+    y -= (m <= 2);
+    const long era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long)doe - 719468;
+}
+
+// The local calendar day an entry falls on, as a contiguous day number.
+long localDayNumber(time_t t)
 {
     struct tm tmv;
     localtime_r(&t, &tmv);
-    return (long)(tmv.tm_year + 1900) * 10000L + (long)(tmv.tm_mon + 1) * 100L +
-           (long)tmv.tm_mday;
+    return daysFromCivil(tmv.tm_year + 1900, (unsigned)(tmv.tm_mon + 1),
+                         (unsigned)tmv.tm_mday);
+}
+
+// Inverse of localDayNumber for axis labels. Noon UTC on that day number maps
+// back through gmtime_r to exactly the civil date daysFromCivil() encoded --
+// deliberately gmtime_r and not localtime_r, because the day number is a civil
+// date index, not an instant, so re-applying a timezone would shift it.
+String shortDateForDay(long dayNum)
+{
+    time_t tt = (time_t)dayNum * 86400 + 43200;
+    struct tm tmv;
+    gmtime_r(&tt, &tmv);
+    char buf[16];
+    strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
+    return String(buf);
 }
 
 String shortDate(time_t t)
@@ -1168,7 +1195,8 @@ void handleHistoryPlot()
 
     // --- Pass 1: count days, find the value range ---
     long count = 0, undated = 0, dayCount = 0;
-    long lastDayKey = -1;
+    long lastDayNum = 0;
+    long dayMin = 0, dayMax = 0;
     time_t tMin = 0, tMax = 0;
     int32_t vMin = 0, vMax = 0;
 
@@ -1189,12 +1217,20 @@ void handleHistoryPlot()
         if (cutoff && t < cutoff)
             continue;
 
-        long key = dayKeyFor(t);
-        if (key != lastDayKey)
+        long dayNum = localDayNumber(t);
+        if (count == 0 || dayNum != lastDayNum)
         {
-            lastDayKey = key;
+            lastDayNum = dayNum;
             dayCount++;
         }
+        if (count == 0)
+        {
+            dayMin = dayMax = dayNum;
+        }
+        if (dayNum < dayMin)
+            dayMin = dayNum;
+        if (dayNum > dayMax)
+            dayMax = dayNum;
 
         // The range has to span both the value and the value it came from, so
         // the first day's opening level isn't clipped off the top or bottom.
@@ -1247,8 +1283,12 @@ void handleHistoryPlot()
         vMax = vMin + MIN_VALUE_SPAN;
     }
 
-    long bucketDays = (dayCount > MAX_CANDLES) ? ((dayCount + MAX_CANDLES - 1) / MAX_CANDLES) : 1;
-    long candleCount = (dayCount + bucketDays - 1) / bucketDays;
+    // The axis is linear in calendar time: it covers every day from the first
+    // to the last, so a day with no counter changes simply leaves a gap rather
+    // than being closed up.
+    long spanDays = dayMax - dayMin + 1;
+    long bucketDays = (spanDays > MAX_CANDLES) ? ((spanDays + MAX_CANDLES - 1) / MAX_CANDLES) : 1;
+    long candleCount = (spanDays + bucketDays - 1) / bucketDays;
     double slot = (double)AREA_W / (double)candleCount;
     int bodyW = (int)(slot * 0.68);
     if (bodyW < 1)
@@ -1283,12 +1323,12 @@ void handleHistoryPlot()
     // --- Pass 2: aggregate each bucket into one candle and stream it out ---
     f.seek(0);
 
-    long dayIndex = -1, bucketIndex = -1;
+    long bucketIndex = -1;
     int32_t cOpen = 0, cHigh = 0, cLow = 0, cClose = 0;
+    // A sentinel value won't do here -- the counter legitimately passes through
+    // zero -- so track "have we seen the first candle yet" explicitly.
+    bool haveFirst = false;
     int32_t firstOpen = 0, lastClose = 0;
-    time_t bucketT = 0, midT = 0;
-    long midBucket = candleCount / 2;
-    lastDayKey = -1;
 
     String bars;
     bars.reserve(2048);
@@ -1339,13 +1379,10 @@ void handleHistoryPlot()
         if (cutoff && t < cutoff)
             continue;
 
-        long key = dayKeyFor(t);
-        if (key != lastDayKey)
-        {
-            lastDayKey = key;
-            dayIndex++;
-        }
-        long b = dayIndex / bucketDays;
+        // Slot is the entry's distance from the start of the window in calendar
+        // days. Entries are chronological (the log is append-only), so this is
+        // non-decreasing and a bucket can be emitted as soon as it changes.
+        long b = (localDayNumber(t) - dayMin) / bucketDays;
 
         if (b != bucketIndex)
         {
@@ -1358,14 +1395,10 @@ void handleHistoryPlot()
             cHigh = (cOpen > v) ? cOpen : v;
             cLow = (cOpen < v) ? cOpen : v;
             cClose = v;
-            bucketT = t;
-            if (b == 0)
+            if (!haveFirst)
             {
                 firstOpen = cOpen;
-            }
-            if (b == midBucket)
-            {
-                midT = t;
+                haveFirst = true;
             }
         }
         else
@@ -1383,30 +1416,26 @@ void handleHistoryPlot()
         emitCandle(bucketIndex, cOpen, cHigh, cLow, cClose);
     }
     f.close();
-    (void)bucketT;
 
-    // --- X labels (the axis is ordinal by active day, so these are the dates
-    // of the first, middle and last candle -- not a linear time interpolation) ---
-    if (midT == 0)
-    {
-        midT = tMax;
-    }
+    // --- X labels. The axis is linear in calendar time now, so the midpoint is
+    // a genuine date halfway through the span rather than whichever candle
+    // happened to land in the middle. ---
     bars += "<text x='" + String(PAD_L) + "' y='" + String(PAD_T + AREA_H + 20) +
-            "' text-anchor='start' font-size='12' fill='#666'>" + shortDate(tMin) +
-            "</text>";
-    if (candleCount > 2)
+            "' text-anchor='start' font-size='12' fill='#666'>" +
+            shortDateForDay(dayMin) + "</text>";
+    if (spanDays > 2)
     {
         bars += "<text x='" + String(PAD_L + AREA_W / 2) + "' y='" +
                 String(PAD_T + AREA_H + 20) +
-                "' text-anchor='middle' font-size='12' fill='#666'>" + shortDate(midT) +
-                "</text>";
+                "' text-anchor='middle' font-size='12' fill='#666'>" +
+                shortDateForDay(dayMin + spanDays / 2) + "</text>";
     }
-    if (candleCount > 1)
+    if (spanDays > 1)
     {
         bars += "<text x='" + String(PLOT_W - PAD_R) + "' y='" +
                 String(PAD_T + AREA_H + 20) +
-                "' text-anchor='end' font-size='12' fill='#666'>" + shortDate(tMax) +
-                "</text>";
+                "' text-anchor='end' font-size='12' fill='#666'>" +
+                shortDateForDay(dayMax) + "</text>";
     }
     bars += "</svg>";
     server.sendContent(bars);
@@ -1414,10 +1443,9 @@ void handleHistoryPlot()
     String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> closed up "
                   "&middot; <span style='color:#cf222e'>&#9632;</span> closed down "
                   "&middot; thin line is the day&#39;s high/low range</p>";
-    note += "<p class='k'>" + String(candleCount) + " candle" +
-            String(candleCount == 1 ? "" : "s") + " from " + String(count) + " entr" +
-            String(count == 1 ? "y" : "ies") + " over " + String(dayCount) + " active day" +
-            String(dayCount == 1 ? "" : "s") + " &middot; " + shortDate(tMin) + " to " +
+    note += "<p class='k'>" + String(count) + " entr" + String(count == 1 ? "y" : "ies") +
+            " on " + String(dayCount) + " of " + String(spanDays) + " day" +
+            String(spanDays == 1 ? "" : "s") + " &middot; " + shortDate(tMin) + " to " +
             shortDate(tMax) + " &middot; counter " + String((long)firstOpen) + " &rarr; " +
             String((long)lastClose);
     if (bucketDays > 1)
@@ -1429,9 +1457,8 @@ void handleHistoryPlot()
         note += " &middot; " + String(undated) + " undated entr" +
                 String(undated == 1 ? "y" : "ies") + " omitted";
     }
-    note += "</p><p class='k'>Days with no counter changes are skipped, the way a "
-            "stock chart skips non-trading days &mdash; the axis steps from one "
-            "active day to the next.</p>";
+    note += "</p><p class='k'>The axis is linear in calendar time, so a gap is a "
+            "stretch of days with no counter changes.</p>";
     server.sendContent(note);
 
     server.sendContent_P(PAGE_FOOT);

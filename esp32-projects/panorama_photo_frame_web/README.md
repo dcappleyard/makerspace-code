@@ -196,18 +196,23 @@ rather than by carrying forward the previous day's close. Both give the same
 answer for a continuous log, but the local derivation stays correct if the log
 has a gap (a swapped card, say).
 
-**Days with no counter changes are skipped**, exactly as a stock chart skips
-non-trading days. The x axis therefore steps from one active day to the next
-rather than being linear in time, which is why its labels are the dates of the
-first, middle, and last candle instead of an even time interpolation. Without
-this, a year window containing a dozen changes would be 365 slots of mostly
-nothing.
+**The x axis is linear in calendar time**, so a day with no counter changes
+leaves a gap rather than being closed up &mdash; unlike a stock chart, which
+skips non-trading days. A long quiet stretch therefore reads as a visibly empty
+span, which is the point: it shows *when* nothing happened, not just what
+happened next.
 
-Windows longer than 180 active days group consecutive days into one candle
-(open of the first day, close of the last, extremes across all of them), and
-the page reports the grouping. That's the candlestick equivalent of the weekly
-or monthly candles a stock chart switches to when zoomed out &mdash; 180 candles
-is about where a body stays wide enough to read across a ~900 px plot.
+Day identity uses a contiguous day number (Howard Hinnant's `days_from_civil`)
+rather than a `YYYYMMDD` key, because the axis has to subtract dates to know how
+far apart they are. Labels convert back through `gmtime_r` at noon UTC on that
+day number &mdash; deliberately not `localtime_r`, since a day number is a civil
+date index rather than an instant, and re-applying a timezone would shift it.
+
+Spans longer than 180 calendar days group consecutive days into one candle (open
+of the first day, close of the last, extremes across all of them), and the page
+reports the grouping. That's the equivalent of the weekly or monthly candles a
+stock chart switches to when zoomed out &mdash; 180 is about where a body stays
+wide enough to read across a ~900 px plot.
 
 The chart is **server-rendered inline SVG** &mdash; no JavaScript, no charting
 library, nothing fetched from a CDN. A local device whose page only works when
@@ -353,8 +358,8 @@ bytes) and 15.2% RAM**. The host-side image/metadata pipeline
   correctly. The geometry was verified off-device by porting the same math to a
   host script and rendering synthetic logs in a browser (bounds, wick spanning
   the body, colour vs. direction, candles chaining open == previous close,
-  multi-day bucketing, single-day, flat-day, and narrow-range cases) &mdash; but
-  the page has not been seen served from the frame itself.
+  multi-day bucketing, single-day, flat-day, narrow-range, and long-gap cases)
+  &mdash; but the page has not been seen served from the frame itself.
 - **Clock**: correct Central time within ~30 s of boot — in summer the offset
   must be **−05:00 (CDT)**, which is what actually tests the DST rules.
 - **Card eject/reinsert**, and a scheduled refresh with no card (must skip
