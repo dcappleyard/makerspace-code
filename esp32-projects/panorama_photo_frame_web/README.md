@@ -64,7 +64,7 @@ There's no `uploadfs` step and no serial clock ritual — both are gone.
 | `/` | Status: current photo, counter, time to next refresh, clock, WiFi, SD free space, uptime, heap. Buttons for next/redraw, the counter row, and card eject. |
 | `/photos` | Every `.bin` on the card with its caption metadata, the current one marked, and a **Show** button to jump straight to any of them. |
 | `/history` | **History Data** &mdash; the counter log as a table, newest first. |
-| `/history/plot` | **History Plot** &mdash; green/red activity bars per day, one block per change, with 1/3/6-month, 1-year and full windows. |
+| `/history/plot` | **History Plot** &mdash; a waterfall of the counter over time, one block per change, with 1/3/6-month, 1-year and full windows. |
 | `/upload` | Upload a `.bin` + `.xml` pair. |
 | `/clock` | Local time, timezone, and manual clock override. |
 | `/status.json` | The same status as `/`, machine-readable. |
@@ -176,20 +176,26 @@ holding it in RAM.
 
 ### History Plot
 
-For each day, a **pair of bars**: green for everything the counter went up that
-day, red for everything it went down. Window buttons cover 1 month, 3 months,
-6 months, 1 year, and full history (full is the default).
+A **waterfall chart** of the counter over time. Each individual change is one
+block, drawn spanning the values it moved *between* &mdash; green upward, red
+downward &mdash; so consecutive blocks chain into a staircase and the chart
+climbs or falls with the running total. The y axis is the counter's value.
 
-**Each bar is subdivided into one block per individual change**, with a hairline
-gap between blocks, so single transactions stay visible rather than being
-summed away. A day of three separate `+1` presses is three stacked blocks, not
-one block of 3.
+A day with several changes divides its column into one sub-column per change, so
+nothing is summed away: a day of `+2, -2, +2` shows three distinct blocks rather
+than the net `+2` a daily summary would collapse it to.
 
-The y axis is the **number of counter units moved that day**, not the counter's
-value &mdash; the running value is reported as `first -> last` in the line under
-the chart. Showing gross up and gross down separately is the point: a day of
-`+2, -2, +2` has a net of `+2`, which hides two of its three changes. Here it
-reads as a green bar of two blocks beside a red bar of one.
+A thin grey **carry line** holds the level across the gaps between blocks and
+across days with no activity, so the eye doesn't lose the value during a quiet
+stretch, and it extends to the right edge to show where the counter currently
+sits.
+
+A dashed grey **riser** marks the counter moving without a logged change. This
+happens for real: editing `<counter>` in `frame_config.xml` by hand changes the
+value without appending to `counter_track.txt`, and a change the view had to
+skip (undated, or before the window's cutoff) has the same effect. Rather than
+let the carry line imply a continuity that isn't there, the jump is drawn
+explicitly.
 
 **The x axis is linear in calendar time**, so a day with no counter changes
 leaves a gap rather than being closed up. A long quiet stretch therefore reads
@@ -202,9 +208,9 @@ far apart they are. Labels convert back through `gmtime_r` at noon UTC on that
 day number &mdash; deliberately not `localtime_r`, since a day number is a civil
 date index rather than an instant, and re-applying a timezone would shift it.
 
-Spans longer than 180 calendar days group consecutive days into one slot, and
-the page reports the grouping. 180 is about where a bar pair stays wide enough
-to read across a ~900 px plot.
+Spans longer than 180 calendar days group consecutive days into one column, and
+the page reports the grouping. 180 is about where a column stays wide enough to
+read across a ~900 px plot.
 
 The chart is **server-rendered inline SVG** &mdash; no JavaScript, no charting
 library, nothing fetched from a CDN. A local device whose page only works when
@@ -212,10 +218,12 @@ the browser has internet access would fail in exactly the situation you'd most
 want it.
 
 The log is scanned three times rather than buffered: pass one finds the calendar
-span, pass two totals each slot so the y axis can be scaled before anything is
-drawn, and pass three streams out one rectangle per change. The only buffer is
-the per-slot totals, bounded by the 180-slot cap at 1.4 KB of static RAM, so
-peak memory stays flat however large the log grows.
+span and value range, pass two counts the changes in each column so pass three
+knows how many sub-columns to divide it into, and pass three streams out one
+rectangle per change. Because entries are chronological, pass three needs only a
+running position and value &mdash; no individual change is ever buffered. The
+sole buffer is the per-column counts, bounded by the 180-column cap at 720 bytes
+of static RAM, so peak memory stays flat however large the log grows.
 
 Entries logged as `TIME_NOT_SET` can't be placed on a time axis, so they're
 skipped and the count of them is reported under the chart &mdash; they're still
@@ -346,11 +354,12 @@ bytes) and 15.2% RAM**. The host-side image/metadata pipeline
 - **Counter steps**: each of the ten buttons moves the counter by its own
   amount and logs one line with that step (`+5`, `-3`, ...); `POST /counter`
   with `d=0` or `d=9` is rejected with a 400.
-- **History Plot**: per-day green/red totals and the block counts within each
-  bar match History Data, the window buttons narrow the range, and the axis
-  labels read correctly. The earlier candlestick form of this page was verified
-  on the device; the bar form has been checked against the real log's expected
-  per-day totals but not yet seen rendered.
+- **History Plot**: the staircase ends at the counter's current value, block
+  counts per day match History Data, and the window buttons narrow the range.
+  Rendered off-device against the real `counter_track.txt` and a dense synthetic
+  log (bounds, colour vs. direction, chronological ordering, sub-column
+  division, carry line, and the dashed riser over the real log's one unlogged
+  jump), but not yet seen served from the frame.
 - **Clock**: correct Central time within ~30 s of boot — in summer the offset
   must be **−05:00 (CDT)**, which is what actually tests the DST rules.
 - **Card eject/reinsert**, and a scheduled refresh with no card (must skip

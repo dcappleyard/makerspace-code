@@ -1009,12 +1009,12 @@ void handleHistory()
 // one slot rather than drawing sub-pixel bars.
 constexpr int MAX_SLOTS = 180;
 
-// Per-slot gross totals, filled by pass 2 so the y axis can be scaled before
-// anything is drawn. Bounded by MAX_SLOTS, so this is 1.4KB of static RAM
-// rather than an unbounded buffer -- and being file-scope keeps it off the
-// loop task's stack. Single-task, so there's no reentrancy to worry about.
-int32_t slotUp[MAX_SLOTS];
-int32_t slotDown[MAX_SLOTS];
+// How many changes fall in each slot, filled by pass 2 so pass 3 knows how
+// many sub-columns to divide a day into before it draws the first one.
+// Bounded by MAX_SLOTS, so this is 720 bytes of static RAM rather than an
+// unbounded buffer -- and being file-scope keeps it off the loop task's stack.
+// Single-task, so there's no reentrancy to worry about.
+int32_t slotEntries[MAX_SLOTS];
 
 // Plot geometry, in viewBox units.
 constexpr int PLOT_W = 920, PLOT_H = 380;
@@ -1162,7 +1162,7 @@ void handleHistoryPlot()
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/html", "");
     server.sendContent_P(PAGE_HEAD);
-    server.sendContent("<h1>Counter activity by day</h1>");
+    server.sendContent("<h1>Counter over time</h1>");
 
     String nav = "<div class='win'>";
     for (size_t i = 0; i < PLOT_WINDOW_COUNT; i++)
@@ -1200,10 +1200,11 @@ void handleHistoryPlot()
         return;
     }
 
-    // --- Pass 1: calendar span, and where the counter started/ended ---
+    // --- Pass 1: calendar span and the counter's value range ---
     long count = 0, undated = 0, dayCount = 0;
     long lastDayNum = 0, dayMin = 0, dayMax = 0;
     time_t tMin = 0, tMax = 0;
+    int32_t vMin = 0, vMax = 0;
     int32_t firstOpen = 0, lastValue = 0;
     long totalUp = 0, totalDown = 0;
 
@@ -1225,13 +1226,16 @@ void handleHistoryPlot()
             continue;
 
         long dayNum = localDayNumber(t);
+        int32_t before = v - step;
+
         if (count == 0)
         {
             dayMin = dayMax = dayNum;
             lastDayNum = dayNum;
             dayCount = 1;
             tMin = tMax = t;
-            firstOpen = v - step;
+            firstOpen = before;
+            vMin = vMax = before;
         }
         else if (dayNum != lastDayNum)
         {
@@ -1246,6 +1250,17 @@ void handleHistoryPlot()
             tMin = t;
         if (t > tMax)
             tMax = t;
+
+        // Both ends of every move have to be on the axis, or a block gets
+        // clipped at the top or bottom of the plot.
+        if (before < vMin)
+            vMin = before;
+        if (before > vMax)
+            vMax = before;
+        if (v < vMin)
+            vMin = v;
+        if (v > vMax)
+            vMax = v;
 
         if (step > 0)
             totalUp += step;
@@ -1273,6 +1288,16 @@ void handleHistoryPlot()
         return;
     }
 
+    // Gridline labels are integers at 4 intervals, so a range under 4 would
+    // print the same number on several lines.
+    constexpr int32_t MIN_VALUE_SPAN = 4;
+    if (vMax - vMin < MIN_VALUE_SPAN)
+    {
+        int32_t mid = (vMax + vMin) / 2;
+        vMin = mid - MIN_VALUE_SPAN / 2;
+        vMax = vMin + MIN_VALUE_SPAN;
+    }
+
     // The axis is linear in calendar time: every day from first to last gets a
     // slot, so a quiet stretch leaves a gap rather than being closed up.
     long spanDays = dayMax - dayMin + 1;
@@ -1281,12 +1306,11 @@ void handleHistoryPlot()
     if (slotCount > MAX_SLOTS)
         slotCount = MAX_SLOTS;
 
-    // --- Pass 2: gross up/down per slot, so the y axis can be scaled before
-    // anything is drawn. Bounded by MAX_SLOTS, so nothing unbounded is held. ---
+    // --- Pass 2: how many changes land in each slot, so pass 3 can divide a
+    // day into that many sub-columns before drawing the first of them. ---
     for (long i = 0; i < slotCount; i++)
     {
-        slotUp[i] = 0;
-        slotDown[i] = 0;
+        slotEntries[i] = 0;
     }
 
     f.seek(0);
@@ -1305,37 +1329,16 @@ void handleHistoryPlot()
             continue;
 
         long b = (localDayNumber(t) - dayMin) / bucketDays;
-        if (b < 0 || b >= slotCount)
-            continue;
-        if (step > 0)
-            slotUp[b] += step;
-        else
-            slotDown[b] += -step;
+        if (b >= 0 && b < slotCount)
+            slotEntries[b]++;
     }
-
-    int32_t maxMag = 1;
-    for (long i = 0; i < slotCount; i++)
-    {
-        if (slotUp[i] > maxMag)
-            maxMag = slotUp[i];
-        if (slotDown[i] > maxMag)
-            maxMag = slotDown[i];
-    }
-    // Gridline labels are integers at 4 intervals, so a range under 4 would
-    // print the same number on several lines.
-    if (maxMag < 4)
-        maxMag = 4;
 
     double slot = (double)AREA_W / (double)slotCount;
-    int barW = (int)(slot * 0.40);
-    if (barW < 1)
-        barW = 1;
-    if (barW > 14)
-        barW = 14;
+    double dayW = slot * 0.82; // leave a little air between days
 
     const int baseY = PAD_T + AREA_H;
-    auto sy = [&](int32_t mag) {
-        return (int)(baseY - (double)mag * AREA_H / (double)maxMag);
+    auto sy = [&](int32_t v) {
+        return (int)(baseY - (double)(v - vMin) * AREA_H / (double)(vMax - vMin));
     };
 
     // --- SVG chrome ---
@@ -1346,7 +1349,7 @@ void handleHistoryPlot()
     for (int i = 0; i <= 4; i++)
     {
         int y = PAD_T + (AREA_H * i) / 4;
-        long v = (long)maxMag - (long)maxMag * i / 4;
+        long v = (long)vMax - (long)(vMax - vMin) * i / 4;
         svg += "<line x1='" + String(PAD_L) + "' y1='" + String(y) + "' x2='" +
                String(PLOT_W - PAD_R) + "' y2='" + String(y) +
                "' stroke='#e5e5e5' stroke-width='1'/>";
@@ -1360,17 +1363,23 @@ void handleHistoryPlot()
            "' stroke='#999' stroke-width='1'/>";
     server.sendContent(svg);
 
-    // --- Pass 3: one rectangle per TRANSACTION, stacked within its day's bar.
-    // Drawing each entry as its own segment (rather than one rect per day) is
-    // what makes individual changes visible: a day of +2,-2,+2 shows a green
-    // bar of two stacked segments beside a red one, instead of the single net
-    // +2 a daily summary would collapse it to. Because entries are
-    // chronological, the running offsets below are all the state it needs --
-    // no per-day buffering. ---
+    // --- Pass 3: one block per change, spanning the values it moved BETWEEN.
+    //
+    // This is the waterfall: a block runs from the counter's value before the
+    // change to its value after, so consecutive blocks chain into a staircase
+    // and the chart climbs or falls with the running total -- while each block
+    // still marks one individual change. A carry line holds the level across
+    // the gaps between blocks and across days with no activity, so the eye
+    // doesn't lose the value during a quiet stretch.
+    //
+    // Entries are chronological, so a running x/value pair is all the state
+    // this needs; nothing is buffered. ---
     f.seek(0);
 
     long curSlot = -1;
-    int32_t runUp = 0, runDown = 0;
+    long subIndex = 0;
+    int prevX = -1;
+    int32_t prevValue = 0;
 
     String bars;
     bars.reserve(2048);
@@ -1396,34 +1405,58 @@ void handleHistoryPlot()
         if (b != curSlot)
         {
             curSlot = b;
-            runUp = 0;
-            runDown = 0;
+            subIndex = 0;
         }
 
-        int cx = (int)(PAD_L + slot * ((double)b + 0.5));
-        bool up = (step > 0);
-        int32_t mag = up ? step : -step;
-        int32_t from = up ? runUp : runDown;
+        long n = slotEntries[b] > 0 ? slotEntries[b] : 1;
+        double x0 = PAD_L + slot * (double)b + (slot - dayW) / 2.0;
+        double subW = dayW / (double)n;
+        int blockX = (int)(x0 + subW * (double)subIndex);
+        int blockW = (int)subW;
+        if (blockW > 2)
+            blockW -= 1; // hairline gap between adjacent changes
+        if (blockW < 1)
+            blockW = 1;
 
-        int yTop = sy(from + mag);
-        int yBot = sy(from);
+        int32_t before = v - step;
+        bool up = (step > 0);
+
+        // Carry the previous level across to this block so the staircase reads
+        // as continuous rather than as floating islands.
+        if (prevX >= 0 && blockX > prevX)
+        {
+            int y = sy(prevValue);
+            bars += "<line x1='" + String(prevX) + "' y1='" + String(y) + "' x2='" +
+                    String(blockX) + "' y2='" + String(y) +
+                    "' stroke='#c8c8c8' stroke-width='1'/>";
+        }
+
+        // The counter can move without anything being logged here: editing
+        // <counter> in frame_config.xml by hand does exactly that, and so does
+        // an entry this view had to skip (undated, or before the window's
+        // cutoff). When the level this change starts from isn't where the last
+        // one left off, mark the jump with a dashed riser instead of letting
+        // the carry line imply a continuity that isn't there.
+        if (prevX >= 0 && before != prevValue)
+        {
+            bars += "<line x1='" + String(blockX) + "' y1='" + String(sy(prevValue)) +
+                    "' x2='" + String(blockX) + "' y2='" + String(sy(before)) +
+                    "' stroke='#c8c8c8' stroke-width='1' stroke-dasharray='3,3'/>";
+        }
+
+        int yTop = sy(before > v ? before : v);
+        int yBot = sy(before > v ? v : before);
         int hgt = yBot - yTop;
         if (hgt < 1)
             hgt = 1;
-        // Hairline gap between stacked segments so each transaction reads as
-        // its own block rather than merging into one solid bar.
-        if (hgt > 2)
-            hgt -= 1;
 
-        int x = up ? (cx - barW) : cx;
-        bars += "<rect x='" + String(x) + "' y='" + String(yTop) + "' width='" +
-                String(barW) + "' height='" + String(hgt) + "' fill='" +
+        bars += "<rect x='" + String(blockX) + "' y='" + String(yTop) + "' width='" +
+                String(blockW) + "' height='" + String(hgt) + "' fill='" +
                 (up ? "#1a7f37" : "#cf222e") + "'/>";
 
-        if (up)
-            runUp += mag;
-        else
-            runDown += mag;
+        prevX = blockX + blockW;
+        prevValue = v;
+        subIndex++;
 
         if (bars.length() > 1500)
         {
@@ -1432,6 +1465,16 @@ void handleHistoryPlot()
         }
     }
     f.close();
+
+    // Hold the current value out to the right edge, so the chart ends at the
+    // level the counter is actually sitting at rather than in mid-air.
+    if (prevX >= 0 && prevX < PLOT_W - PAD_R)
+    {
+        int y = sy(prevValue);
+        bars += "<line x1='" + String(prevX) + "' y1='" + String(y) + "' x2='" +
+                String(PLOT_W - PAD_R) + "' y2='" + String(y) +
+                "' stroke='#c8c8c8' stroke-width='1'/>";
+    }
 
     // --- X labels: a genuine interpolation, since the axis is linear in time ---
     bars += "<text x='" + String(PAD_L) + "' y='" + String(baseY + 20) +
@@ -1452,10 +1495,12 @@ void handleHistoryPlot()
     bars += "</svg>";
     server.sendContent(bars);
 
-    String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> increases "
-                  "&middot; <span style='color:#cf222e'>&#9632;</span> decreases "
-                  "&middot; each block is one counter change; bar height is the total "
-                  "moved that day</p>";
+    String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> increase "
+                  "&middot; <span style='color:#cf222e'>&#9632;</span> decrease "
+                  "&middot; each block is one change, drawn between the values it "
+                  "moved from and to; the grey line carries the level across quiet "
+                  "days, and a dashed riser marks the counter moving without a "
+                  "logged change (editing frame_config.xml by hand does this)</p>";
     note += "<p class='k'>" + String(count) + " change" + String(count == 1 ? "" : "s") +
             " on " + String(dayCount) + " of " + String(spanDays) + " day" +
             String(spanDays == 1 ? "" : "s") + " &middot; " + shortDate(tMin) + " to " +
@@ -1464,7 +1509,7 @@ void handleHistoryPlot()
             " &rarr; " + String((long)lastValue);
     if (bucketDays > 1)
     {
-        note += " &middot; each bar covers " + String(bucketDays) + " days";
+        note += " &middot; each column covers " + String(bucketDays) + " days";
     }
     if (undated > 0)
     {
