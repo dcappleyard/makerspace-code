@@ -1004,10 +1004,17 @@ void handleHistory()
 // reason the data page reads only a window from the end.
 // -----------------------------------------------------------------------------
 
-// At ~838px of plot area this leaves ~4.6px per slot, which is about the
-// narrowest a candle body plus its gap stays legible. Longer windows group
-// consecutive days into one candle rather than drawing sub-pixel bars.
-constexpr int MAX_CANDLES = 180;
+// At ~838px of plot area this leaves ~4.6px per day slot -- about the narrowest
+// a green/red bar pair stays legible. Longer spans group consecutive days into
+// one slot rather than drawing sub-pixel bars.
+constexpr int MAX_SLOTS = 180;
+
+// Per-slot gross totals, filled by pass 2 so the y axis can be scaled before
+// anything is drawn. Bounded by MAX_SLOTS, so this is 1.4KB of static RAM
+// rather than an unbounded buffer -- and being file-scope keeps it off the
+// loop task's stack. Single-task, so there's no reentrancy to worry about.
+int32_t slotUp[MAX_SLOTS];
+int32_t slotDown[MAX_SLOTS];
 
 // Plot geometry, in viewBox units.
 constexpr int PLOT_W = 920, PLOT_H = 380;
@@ -1155,7 +1162,7 @@ void handleHistoryPlot()
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/html", "");
     server.sendContent_P(PAGE_HEAD);
-    server.sendContent("<h1>Counter by day</h1>");
+    server.sendContent("<h1>Counter activity by day</h1>");
 
     String nav = "<div class='win'>";
     for (size_t i = 0; i < PLOT_WINDOW_COUNT; i++)
@@ -1193,12 +1200,12 @@ void handleHistoryPlot()
         return;
     }
 
-    // --- Pass 1: count days, find the value range ---
+    // --- Pass 1: calendar span, and where the counter started/ended ---
     long count = 0, undated = 0, dayCount = 0;
-    long lastDayNum = 0;
-    long dayMin = 0, dayMax = 0;
+    long lastDayNum = 0, dayMin = 0, dayMax = 0;
     time_t tMin = 0, tMax = 0;
-    int32_t vMin = 0, vMax = 0;
+    int32_t firstOpen = 0, lastValue = 0;
+    long totalUp = 0, totalDown = 0;
 
     while (f.available())
     {
@@ -1218,40 +1225,34 @@ void handleHistoryPlot()
             continue;
 
         long dayNum = localDayNumber(t);
-        if (count == 0 || dayNum != lastDayNum)
-        {
-            lastDayNum = dayNum;
-            dayCount++;
-        }
         if (count == 0)
         {
             dayMin = dayMax = dayNum;
+            lastDayNum = dayNum;
+            dayCount = 1;
+            tMin = tMax = t;
+            firstOpen = v - step;
+        }
+        else if (dayNum != lastDayNum)
+        {
+            lastDayNum = dayNum;
+            dayCount++;
         }
         if (dayNum < dayMin)
             dayMin = dayNum;
         if (dayNum > dayMax)
             dayMax = dayNum;
-
-        // The range has to span both the value and the value it came from, so
-        // the first day's opening level isn't clipped off the top or bottom.
-        int32_t openV = v - step;
-        if (count == 0)
-        {
-            tMin = tMax = t;
-            vMin = vMax = v;
-        }
         if (t < tMin)
             tMin = t;
         if (t > tMax)
             tMax = t;
-        if (v < vMin)
-            vMin = v;
-        if (v > vMax)
-            vMax = v;
-        if (openV < vMin)
-            vMin = openV;
-        if (openV > vMax)
-            vMax = openV;
+
+        if (step > 0)
+            totalUp += step;
+        else
+            totalDown += -step;
+
+        lastValue = v;
         count++;
     }
 
@@ -1272,40 +1273,80 @@ void handleHistoryPlot()
         return;
     }
 
-    // The y axis is labelled with integers at 4 intervals, so a range narrower
-    // than that prints the same number on several gridlines (and a range of
-    // zero would divide by zero outright). Widen it around its midpoint.
-    constexpr int32_t MIN_VALUE_SPAN = 4;
-    if (vMax - vMin < MIN_VALUE_SPAN)
+    // The axis is linear in calendar time: every day from first to last gets a
+    // slot, so a quiet stretch leaves a gap rather than being closed up.
+    long spanDays = dayMax - dayMin + 1;
+    long bucketDays = (spanDays > MAX_SLOTS) ? ((spanDays + MAX_SLOTS - 1) / MAX_SLOTS) : 1;
+    long slotCount = (spanDays + bucketDays - 1) / bucketDays;
+    if (slotCount > MAX_SLOTS)
+        slotCount = MAX_SLOTS;
+
+    // --- Pass 2: gross up/down per slot, so the y axis can be scaled before
+    // anything is drawn. Bounded by MAX_SLOTS, so nothing unbounded is held. ---
+    for (long i = 0; i < slotCount; i++)
     {
-        int32_t mid = (vMax + vMin) / 2;
-        vMin = mid - MIN_VALUE_SPAN / 2;
-        vMax = vMin + MIN_VALUE_SPAN;
+        slotUp[i] = 0;
+        slotDown[i] = 0;
     }
 
-    // The axis is linear in calendar time: it covers every day from the first
-    // to the last, so a day with no counter changes simply leaves a gap rather
-    // than being closed up.
-    long spanDays = dayMax - dayMin + 1;
-    long bucketDays = (spanDays > MAX_CANDLES) ? ((spanDays + MAX_CANDLES - 1) / MAX_CANDLES) : 1;
-    long candleCount = (spanDays + bucketDays - 1) / bucketDays;
-    double slot = (double)AREA_W / (double)candleCount;
-    int bodyW = (int)(slot * 0.68);
-    if (bodyW < 1)
-        bodyW = 1;
-    if (bodyW > 16)
-        bodyW = 16;
+    f.seek(0);
+    while (f.available())
+    {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
 
-    // --- SVG chrome (needs only pass-1 results, so it goes out first) ---
+        time_t t;
+        int32_t step, v;
+        if (!parseTrackLine(line, &t, &step, &v))
+            continue;
+        if (cutoff && t < cutoff)
+            continue;
+
+        long b = (localDayNumber(t) - dayMin) / bucketDays;
+        if (b < 0 || b >= slotCount)
+            continue;
+        if (step > 0)
+            slotUp[b] += step;
+        else
+            slotDown[b] += -step;
+    }
+
+    int32_t maxMag = 1;
+    for (long i = 0; i < slotCount; i++)
+    {
+        if (slotUp[i] > maxMag)
+            maxMag = slotUp[i];
+        if (slotDown[i] > maxMag)
+            maxMag = slotDown[i];
+    }
+    // Gridline labels are integers at 4 intervals, so a range under 4 would
+    // print the same number on several lines.
+    if (maxMag < 4)
+        maxMag = 4;
+
+    double slot = (double)AREA_W / (double)slotCount;
+    int barW = (int)(slot * 0.40);
+    if (barW < 1)
+        barW = 1;
+    if (barW > 14)
+        barW = 14;
+
+    const int baseY = PAD_T + AREA_H;
+    auto sy = [&](int32_t mag) {
+        return (int)(baseY - (double)mag * AREA_H / (double)maxMag);
+    };
+
+    // --- SVG chrome ---
     String svg;
     svg.reserve(1536);
     svg += "<svg viewBox='0 0 " + String(PLOT_W) + " " + String(PLOT_H) +
            "' preserveAspectRatio='xMidYMid meet' role='img'>";
-
     for (int i = 0; i <= 4; i++)
     {
         int y = PAD_T + (AREA_H * i) / 4;
-        long v = vMax - (long)(vMax - vMin) * i / 4;
+        long v = (long)maxMag - (long)maxMag * i / 4;
         svg += "<line x1='" + String(PAD_L) + "' y1='" + String(y) + "' x2='" +
                String(PLOT_W - PAD_R) + "' y2='" + String(y) +
                "' stroke='#e5e5e5' stroke-width='1'/>";
@@ -1313,57 +1354,26 @@ void handleHistoryPlot()
                "' text-anchor='end' font-size='12' fill='#666'>" + String(v) + "</text>";
     }
     svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T) + "' x2='" +
-           String(PAD_L) + "' y2='" + String(PAD_T + AREA_H) +
-           "' stroke='#999' stroke-width='1'/>";
-    svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T + AREA_H) + "' x2='" +
-           String(PLOT_W - PAD_R) + "' y2='" + String(PAD_T + AREA_H) +
+           String(PAD_L) + "' y2='" + String(baseY) + "' stroke='#999' stroke-width='1'/>";
+    svg += "<line x1='" + String(PAD_L) + "' y1='" + String(baseY) + "' x2='" +
+           String(PLOT_W - PAD_R) + "' y2='" + String(baseY) +
            "' stroke='#999' stroke-width='1'/>";
     server.sendContent(svg);
 
-    // --- Pass 2: aggregate each bucket into one candle and stream it out ---
+    // --- Pass 3: one rectangle per TRANSACTION, stacked within its day's bar.
+    // Drawing each entry as its own segment (rather than one rect per day) is
+    // what makes individual changes visible: a day of +2,-2,+2 shows a green
+    // bar of two stacked segments beside a red one, instead of the single net
+    // +2 a daily summary would collapse it to. Because entries are
+    // chronological, the running offsets below are all the state it needs --
+    // no per-day buffering. ---
     f.seek(0);
 
-    long bucketIndex = -1;
-    int32_t cOpen = 0, cHigh = 0, cLow = 0, cClose = 0;
-    // A sentinel value won't do here -- the counter legitimately passes through
-    // zero -- so track "have we seen the first candle yet" explicitly.
-    bool haveFirst = false;
-    int32_t firstOpen = 0, lastClose = 0;
+    long curSlot = -1;
+    int32_t runUp = 0, runDown = 0;
 
     String bars;
     bars.reserve(2048);
-
-    // Emits one candle: a thin wick spanning low..high, a body spanning
-    // open..close, green when the day closed up and red when it closed down.
-    auto emitCandle = [&](long idx, int32_t o, int32_t h, int32_t l, int32_t c) {
-        int cx = (int)(PAD_L + slot * ((double)idx + 0.5));
-        auto sy = [&](int32_t v) {
-            return (int)(PAD_T + AREA_H -
-                         (double)(v - vMin) * AREA_H / (double)(vMax - vMin));
-        };
-        const char *color = (c > o) ? "#1a7f37" : (c < o) ? "#cf222e" : "#8c8c8c";
-
-        bars += "<line x1='" + String(cx) + "' y1='" + String(sy(h)) + "' x2='" +
-                String(cx) + "' y2='" + String(sy(l)) + "' stroke='" + color +
-                "' stroke-width='1'/>";
-
-        int yTop = sy(o > c ? o : c);
-        int yBot = sy(o > c ? c : o);
-        int hgt = yBot - yTop;
-        if (hgt < 1)
-        {
-            hgt = 1; // unchanged day -- a flat tick, the stock-chart "doji"
-        }
-        bars += "<rect x='" + String(cx - bodyW / 2) + "' y='" + String(yTop) +
-                "' width='" + String(bodyW) + "' height='" + String(hgt) + "' fill='" +
-                color + "'/>";
-
-        if (bars.length() > 1500)
-        {
-            server.sendContent(bars);
-            bars = "";
-        }
-    };
 
     while (f.available())
     {
@@ -1379,83 +1389,87 @@ void handleHistoryPlot()
         if (cutoff && t < cutoff)
             continue;
 
-        // Slot is the entry's distance from the start of the window in calendar
-        // days. Entries are chronological (the log is append-only), so this is
-        // non-decreasing and a bucket can be emitted as soon as it changes.
         long b = (localDayNumber(t) - dayMin) / bucketDays;
+        if (b < 0 || b >= slotCount)
+            continue;
 
-        if (b != bucketIndex)
+        if (b != curSlot)
         {
-            if (bucketIndex >= 0)
-            {
-                emitCandle(bucketIndex, cOpen, cHigh, cLow, cClose);
-            }
-            bucketIndex = b;
-            cOpen = v - step;
-            cHigh = (cOpen > v) ? cOpen : v;
-            cLow = (cOpen < v) ? cOpen : v;
-            cClose = v;
-            if (!haveFirst)
-            {
-                firstOpen = cOpen;
-                haveFirst = true;
-            }
+            curSlot = b;
+            runUp = 0;
+            runDown = 0;
         }
+
+        int cx = (int)(PAD_L + slot * ((double)b + 0.5));
+        bool up = (step > 0);
+        int32_t mag = up ? step : -step;
+        int32_t from = up ? runUp : runDown;
+
+        int yTop = sy(from + mag);
+        int yBot = sy(from);
+        int hgt = yBot - yTop;
+        if (hgt < 1)
+            hgt = 1;
+        // Hairline gap between stacked segments so each transaction reads as
+        // its own block rather than merging into one solid bar.
+        if (hgt > 2)
+            hgt -= 1;
+
+        int x = up ? (cx - barW) : cx;
+        bars += "<rect x='" + String(x) + "' y='" + String(yTop) + "' width='" +
+                String(barW) + "' height='" + String(hgt) + "' fill='" +
+                (up ? "#1a7f37" : "#cf222e") + "'/>";
+
+        if (up)
+            runUp += mag;
         else
+            runDown += mag;
+
+        if (bars.length() > 1500)
         {
-            if (v > cHigh)
-                cHigh = v;
-            if (v < cLow)
-                cLow = v;
-            cClose = v;
+            server.sendContent(bars);
+            bars = "";
         }
-        lastClose = v;
-    }
-    if (bucketIndex >= 0)
-    {
-        emitCandle(bucketIndex, cOpen, cHigh, cLow, cClose);
     }
     f.close();
 
-    // --- X labels. The axis is linear in calendar time now, so the midpoint is
-    // a genuine date halfway through the span rather than whichever candle
-    // happened to land in the middle. ---
-    bars += "<text x='" + String(PAD_L) + "' y='" + String(PAD_T + AREA_H + 20) +
+    // --- X labels: a genuine interpolation, since the axis is linear in time ---
+    bars += "<text x='" + String(PAD_L) + "' y='" + String(baseY + 20) +
             "' text-anchor='start' font-size='12' fill='#666'>" +
             shortDateForDay(dayMin) + "</text>";
     if (spanDays > 2)
     {
-        bars += "<text x='" + String(PAD_L + AREA_W / 2) + "' y='" +
-                String(PAD_T + AREA_H + 20) +
+        bars += "<text x='" + String(PAD_L + AREA_W / 2) + "' y='" + String(baseY + 20) +
                 "' text-anchor='middle' font-size='12' fill='#666'>" +
                 shortDateForDay(dayMin + spanDays / 2) + "</text>";
     }
     if (spanDays > 1)
     {
-        bars += "<text x='" + String(PLOT_W - PAD_R) + "' y='" +
-                String(PAD_T + AREA_H + 20) +
+        bars += "<text x='" + String(PLOT_W - PAD_R) + "' y='" + String(baseY + 20) +
                 "' text-anchor='end' font-size='12' fill='#666'>" +
                 shortDateForDay(dayMax) + "</text>";
     }
     bars += "</svg>";
     server.sendContent(bars);
 
-    String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> closed up "
-                  "&middot; <span style='color:#cf222e'>&#9632;</span> closed down "
-                  "&middot; thin line is the day&#39;s high/low range</p>";
-    note += "<p class='k'>" + String(count) + " entr" + String(count == 1 ? "y" : "ies") +
+    String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> increases "
+                  "&middot; <span style='color:#cf222e'>&#9632;</span> decreases "
+                  "&middot; each block is one counter change; bar height is the total "
+                  "moved that day</p>";
+    note += "<p class='k'>" + String(count) + " change" + String(count == 1 ? "" : "s") +
             " on " + String(dayCount) + " of " + String(spanDays) + " day" +
             String(spanDays == 1 ? "" : "s") + " &middot; " + shortDate(tMin) + " to " +
-            shortDate(tMax) + " &middot; counter " + String((long)firstOpen) + " &rarr; " +
-            String((long)lastClose);
+            shortDate(tMax) + " &middot; +" + String(totalUp) + " up, &minus;" +
+            String(totalDown) + " down &middot; counter " + String((long)firstOpen) +
+            " &rarr; " + String((long)lastValue);
     if (bucketDays > 1)
     {
-        note += " &middot; each candle covers " + String(bucketDays) + " days";
+        note += " &middot; each bar covers " + String(bucketDays) + " days";
     }
     if (undated > 0)
     {
-        note += " &middot; " + String(undated) + " undated entr" +
-                String(undated == 1 ? "y" : "ies") + " omitted";
+        note += " &middot; " + String(undated) + " undated change" +
+                String(undated == 1 ? "" : "s") + " omitted";
     }
     note += "</p><p class='k'>The axis is linear in calendar time, so a gap is a "
             "stretch of days with no counter changes.</p>";
