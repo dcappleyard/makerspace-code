@@ -1004,8 +1004,10 @@ void handleHistory()
 // reason the data page reads only a window from the end.
 // -----------------------------------------------------------------------------
 
-// ~900px of plot width; more points than this are invisible anyway.
-constexpr int MAX_PLOT_POINTS = 400;
+// At ~838px of plot area this leaves ~4.6px per slot, which is about the
+// narrowest a candle body plus its gap stays legible. Longer windows group
+// consecutive days into one candle rather than drawing sub-pixel bars.
+constexpr int MAX_CANDLES = 180;
 
 // Plot geometry, in viewBox units.
 constexpr int PLOT_W = 920, PLOT_H = 380;
@@ -1047,9 +1049,14 @@ time_t parseTrackTimestamp(const String &field)
     return mktime(&tmv);
 }
 
-// Splits one log line into its timestamp and counter value. Returns false for
-// blank, malformed, or TIME_NOT_SET lines.
-bool parseTrackLine(const String &line, time_t *tOut, int32_t *vOut)
+// Splits one log line into its timestamp, step, and resulting counter value.
+// Returns false for blank, malformed, or TIME_NOT_SET lines.
+//
+// The step matters for the candlesticks: a day's OPENING value is the value the
+// counter held before that day's first change, i.e. (value - step) of that
+// entry. Deriving it from the entry itself rather than from the previous day's
+// close keeps it correct even if the log has a gap (a swapped card, say).
+bool parseTrackLine(const String &line, time_t *tOut, int32_t *stepOut, int32_t *vOut)
 {
     int t1 = line.indexOf('\t');
     if (t1 < 0)
@@ -1063,8 +1070,20 @@ bool parseTrackLine(const String &line, time_t *tOut, int32_t *vOut)
         return false;
 
     *tOut = t;
+    // toInt() -> atol(), which accepts the leading '+' that "%+d" writes.
+    *stepOut = (int32_t)line.substring(t1 + 1, t2).toInt();
     *vOut = (int32_t)line.substring(t2 + 1).toInt();
     return true;
+}
+
+// Calendar day in local time, as an ordered, unique key. Only ever compared for
+// equality/ordering, never subtracted, so the gaps between month keys are fine.
+long dayKeyFor(time_t t)
+{
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    return (long)(tmv.tm_year + 1900) * 10000L + (long)(tmv.tm_mon + 1) * 100L +
+           (long)tmv.tm_mday;
 }
 
 String shortDate(time_t t)
@@ -1109,7 +1128,7 @@ void handleHistoryPlot()
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/html", "");
     server.sendContent_P(PAGE_HEAD);
-    server.sendContent("<h1>Counter over time</h1>");
+    server.sendContent("<h1>Counter by day</h1>");
 
     String nav = "<div class='win'>";
     for (size_t i = 0; i < PLOT_WINDOW_COUNT; i++)
@@ -1147,8 +1166,9 @@ void handleHistoryPlot()
         return;
     }
 
-    // --- Pass 1: count and find the axis ranges ---
-    long count = 0, undated = 0;
+    // --- Pass 1: count days, find the value range ---
+    long count = 0, undated = 0, dayCount = 0;
+    long lastDayKey = -1;
     time_t tMin = 0, tMax = 0;
     int32_t vMin = 0, vMax = 0;
 
@@ -1160,8 +1180,8 @@ void handleHistoryPlot()
             continue;
 
         time_t t;
-        int32_t v;
-        if (!parseTrackLine(line, &t, &v))
+        int32_t step, v;
+        if (!parseTrackLine(line, &t, &step, &v))
         {
             undated++;
             continue;
@@ -1169,22 +1189,33 @@ void handleHistoryPlot()
         if (cutoff && t < cutoff)
             continue;
 
+        long key = dayKeyFor(t);
+        if (key != lastDayKey)
+        {
+            lastDayKey = key;
+            dayCount++;
+        }
+
+        // The range has to span both the value and the value it came from, so
+        // the first day's opening level isn't clipped off the top or bottom.
+        int32_t openV = v - step;
         if (count == 0)
         {
             tMin = tMax = t;
             vMin = vMax = v;
         }
-        else
-        {
-            if (t < tMin)
-                tMin = t;
-            if (t > tMax)
-                tMax = t;
-            if (v < vMin)
-                vMin = v;
-            if (v > vMax)
-                vMax = v;
-        }
+        if (t < tMin)
+            tMin = t;
+        if (t > tMax)
+            tMax = t;
+        if (v < vMin)
+            vMin = v;
+        if (v > vMax)
+            vMax = v;
+        if (openV < vMin)
+            vMin = openV;
+        if (openV > vMax)
+            vMax = openV;
         count++;
     }
 
@@ -1205,63 +1236,32 @@ void handleHistoryPlot()
         return;
     }
 
-    // Degenerate ranges would divide by zero; pad them into something drawable.
-    if (vMax == vMin)
+    // The y axis is labelled with integers at 4 intervals, so a range narrower
+    // than that prints the same number on several gridlines (and a range of
+    // zero would divide by zero outright). Widen it around its midpoint.
+    constexpr int32_t MIN_VALUE_SPAN = 4;
+    if (vMax - vMin < MIN_VALUE_SPAN)
     {
-        vMax = vMin + 1;
-        vMin -= 1;
+        int32_t mid = (vMax + vMin) / 2;
+        vMin = mid - MIN_VALUE_SPAN / 2;
+        vMax = vMin + MIN_VALUE_SPAN;
     }
-    bool singleInstant = (tMax == tMin);
 
-    long stride = (count > MAX_PLOT_POINTS) ? (count / MAX_PLOT_POINTS) : 1;
+    long bucketDays = (dayCount > MAX_CANDLES) ? ((dayCount + MAX_CANDLES - 1) / MAX_CANDLES) : 1;
+    long candleCount = (dayCount + bucketDays - 1) / bucketDays;
+    double slot = (double)AREA_W / (double)candleCount;
+    int bodyW = (int)(slot * 0.68);
+    if (bodyW < 1)
+        bodyW = 1;
+    if (bodyW > 16)
+        bodyW = 16;
 
-    // --- Pass 2: emit the polyline ---
-    f.seek(0);
-
-    String pts;
-    pts.reserve(MAX_PLOT_POINTS * 14 + 64);
-    long idx = 0, plotted = 0;
-    int32_t firstV = 0, lastV = 0;
-
-    while (f.available())
-    {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0)
-            continue;
-
-        time_t t;
-        int32_t v;
-        if (!parseTrackLine(line, &t, &v))
-            continue;
-        if (cutoff && t < cutoff)
-            continue;
-
-        bool keep = (idx % stride == 0) || (idx == count - 1); // always keep the last
-        if (keep)
-        {
-            int x = singleInstant
-                        ? (PAD_L + AREA_W / 2)
-                        : (int)(PAD_L + (double)(t - tMin) * AREA_W / (double)(tMax - tMin));
-            int y = (int)(PAD_T + AREA_H -
-                          (double)(v - vMin) * AREA_H / (double)(vMax - vMin));
-            pts += String(x) + "," + String(y) + " ";
-            if (plotted == 0)
-                firstV = v;
-            lastV = v;
-            plotted++;
-        }
-        idx++;
-    }
-    f.close();
-
-    // --- SVG ---
+    // --- SVG chrome (needs only pass-1 results, so it goes out first) ---
     String svg;
-    svg.reserve(2048);
+    svg.reserve(1536);
     svg += "<svg viewBox='0 0 " + String(PLOT_W) + " " + String(PLOT_H) +
            "' preserveAspectRatio='xMidYMid meet' role='img'>";
 
-    // Horizontal gridlines + y labels.
     for (int i = 0; i <= 4; i++)
     {
         int y = PAD_T + (AREA_H * i) / 4;
@@ -1272,61 +1272,166 @@ void handleHistoryPlot()
         svg += "<text x='" + String(PAD_L - 8) + "' y='" + String(y + 4) +
                "' text-anchor='end' font-size='12' fill='#666'>" + String(v) + "</text>";
     }
-
-    // Axes.
     svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T) + "' x2='" +
            String(PAD_L) + "' y2='" + String(PAD_T + AREA_H) +
            "' stroke='#999' stroke-width='1'/>";
     svg += "<line x1='" + String(PAD_L) + "' y1='" + String(PAD_T + AREA_H) + "' x2='" +
            String(PLOT_W - PAD_R) + "' y2='" + String(PAD_T + AREA_H) +
            "' stroke='#999' stroke-width='1'/>";
-
-    // X labels: start, middle, end.
-    const char *anchors[3] = {"start", "middle", "end"};
-    for (int i = 0; i <= 2; i++)
-    {
-        int x = PAD_L + (AREA_W * i) / 2;
-        time_t t = singleInstant ? tMin : (tMin + (time_t)((double)(tMax - tMin) * i / 2.0));
-        svg += "<text x='" + String(x) + "' y='" + String(PAD_T + AREA_H + 20) +
-               "' text-anchor='" + anchors[i] + "' font-size='12' fill='#666'>" +
-               shortDate(t) + "</text>";
-    }
-
-    if (plotted == 1)
-    {
-        // A polyline of one point draws nothing -- mark it so the page isn't blank.
-        int sp = pts.indexOf(',');
-        int se = pts.indexOf(' ');
-        if (sp > 0 && se > sp)
-        {
-            svg += "<circle cx='" + pts.substring(0, sp) + "' cy='" +
-                   pts.substring(sp + 1, se) + "' r='4' fill='#333'/>";
-        }
-    }
-    else
-    {
-        svg += "<polyline fill='none' stroke='#333' stroke-width='2' "
-               "stroke-linejoin='round' stroke-linecap='round' points='" +
-               pts + "'/>";
-    }
-
-    svg += "</svg>";
     server.sendContent(svg);
 
-    String note = "<p class='k'>" + String(count) + " entr" +
-                  String(count == 1 ? "y" : "ies") + " from " + shortDate(tMin) + " to " +
-                  shortDate(tMax) + " &middot; counter " + String((long)firstV) +
-                  " &rarr; " + String((long)lastV);
-    if (stride > 1)
+    // --- Pass 2: aggregate each bucket into one candle and stream it out ---
+    f.seek(0);
+
+    long dayIndex = -1, bucketIndex = -1;
+    int32_t cOpen = 0, cHigh = 0, cLow = 0, cClose = 0;
+    int32_t firstOpen = 0, lastClose = 0;
+    time_t bucketT = 0, midT = 0;
+    long midBucket = candleCount / 2;
+    lastDayKey = -1;
+
+    String bars;
+    bars.reserve(2048);
+
+    // Emits one candle: a thin wick spanning low..high, a body spanning
+    // open..close, green when the day closed up and red when it closed down.
+    auto emitCandle = [&](long idx, int32_t o, int32_t h, int32_t l, int32_t c) {
+        int cx = (int)(PAD_L + slot * ((double)idx + 0.5));
+        auto sy = [&](int32_t v) {
+            return (int)(PAD_T + AREA_H -
+                         (double)(v - vMin) * AREA_H / (double)(vMax - vMin));
+        };
+        const char *color = (c > o) ? "#1a7f37" : (c < o) ? "#cf222e" : "#8c8c8c";
+
+        bars += "<line x1='" + String(cx) + "' y1='" + String(sy(h)) + "' x2='" +
+                String(cx) + "' y2='" + String(sy(l)) + "' stroke='" + color +
+                "' stroke-width='1'/>";
+
+        int yTop = sy(o > c ? o : c);
+        int yBot = sy(o > c ? c : o);
+        int hgt = yBot - yTop;
+        if (hgt < 1)
+        {
+            hgt = 1; // unchanged day -- a flat tick, the stock-chart "doji"
+        }
+        bars += "<rect x='" + String(cx - bodyW / 2) + "' y='" + String(yTop) +
+                "' width='" + String(bodyW) + "' height='" + String(hgt) + "' fill='" +
+                color + "'/>";
+
+        if (bars.length() > 1500)
+        {
+            server.sendContent(bars);
+            bars = "";
+        }
+    };
+
+    while (f.available())
     {
-        note += " &middot; showing 1 point in every " + String(stride);
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
+
+        time_t t;
+        int32_t step, v;
+        if (!parseTrackLine(line, &t, &step, &v))
+            continue;
+        if (cutoff && t < cutoff)
+            continue;
+
+        long key = dayKeyFor(t);
+        if (key != lastDayKey)
+        {
+            lastDayKey = key;
+            dayIndex++;
+        }
+        long b = dayIndex / bucketDays;
+
+        if (b != bucketIndex)
+        {
+            if (bucketIndex >= 0)
+            {
+                emitCandle(bucketIndex, cOpen, cHigh, cLow, cClose);
+            }
+            bucketIndex = b;
+            cOpen = v - step;
+            cHigh = (cOpen > v) ? cOpen : v;
+            cLow = (cOpen < v) ? cOpen : v;
+            cClose = v;
+            bucketT = t;
+            if (b == 0)
+            {
+                firstOpen = cOpen;
+            }
+            if (b == midBucket)
+            {
+                midT = t;
+            }
+        }
+        else
+        {
+            if (v > cHigh)
+                cHigh = v;
+            if (v < cLow)
+                cLow = v;
+            cClose = v;
+        }
+        lastClose = v;
+    }
+    if (bucketIndex >= 0)
+    {
+        emitCandle(bucketIndex, cOpen, cHigh, cLow, cClose);
+    }
+    f.close();
+    (void)bucketT;
+
+    // --- X labels (the axis is ordinal by active day, so these are the dates
+    // of the first, middle and last candle -- not a linear time interpolation) ---
+    if (midT == 0)
+    {
+        midT = tMax;
+    }
+    bars += "<text x='" + String(PAD_L) + "' y='" + String(PAD_T + AREA_H + 20) +
+            "' text-anchor='start' font-size='12' fill='#666'>" + shortDate(tMin) +
+            "</text>";
+    if (candleCount > 2)
+    {
+        bars += "<text x='" + String(PAD_L + AREA_W / 2) + "' y='" +
+                String(PAD_T + AREA_H + 20) +
+                "' text-anchor='middle' font-size='12' fill='#666'>" + shortDate(midT) +
+                "</text>";
+    }
+    if (candleCount > 1)
+    {
+        bars += "<text x='" + String(PLOT_W - PAD_R) + "' y='" +
+                String(PAD_T + AREA_H + 20) +
+                "' text-anchor='end' font-size='12' fill='#666'>" + shortDate(tMax) +
+                "</text>";
+    }
+    bars += "</svg>";
+    server.sendContent(bars);
+
+    String note = "<p class='k'><span style='color:#1a7f37'>&#9632;</span> closed up "
+                  "&middot; <span style='color:#cf222e'>&#9632;</span> closed down "
+                  "&middot; thin line is the day&#39;s high/low range</p>";
+    note += "<p class='k'>" + String(candleCount) + " candle" +
+            String(candleCount == 1 ? "" : "s") + " from " + String(count) + " entr" +
+            String(count == 1 ? "y" : "ies") + " over " + String(dayCount) + " active day" +
+            String(dayCount == 1 ? "" : "s") + " &middot; " + shortDate(tMin) + " to " +
+            shortDate(tMax) + " &middot; counter " + String((long)firstOpen) + " &rarr; " +
+            String((long)lastClose);
+    if (bucketDays > 1)
+    {
+        note += " &middot; each candle covers " + String(bucketDays) + " days";
     }
     if (undated > 0)
     {
         note += " &middot; " + String(undated) + " undated entr" +
                 String(undated == 1 ? "y" : "ies") + " omitted";
     }
-    note += "</p>";
+    note += "</p><p class='k'>Days with no counter changes are skipped, the way a "
+            "stock chart skips non-trading days &mdash; the axis steps from one "
+            "active day to the next.</p>";
     server.sendContent(note);
 
     server.sendContent_P(PAGE_FOOT);

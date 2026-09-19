@@ -64,7 +64,7 @@ There's no `uploadfs` step and no serial clock ritual — both are gone.
 | `/` | Status: current photo, counter, time to next refresh, clock, WiFi, SD free space, uptime, heap. Buttons for next/redraw, the counter row, and card eject. |
 | `/photos` | Every `.bin` on the card with its caption metadata, the current one marked, and a **Show** button to jump straight to any of them. |
 | `/history` | **History Data** &mdash; the counter log as a table, newest first. |
-| `/history/plot` | **History Plot** &mdash; counter value over time, with 1/3/6-month, 1-year and full windows. |
+| `/history/plot` | **History Plot** &mdash; daily candlestick chart of the counter, with 1/3/6-month, 1-year and full windows. |
 | `/upload` | Upload a `.bin` + `.xml` pair. |
 | `/clock` | Local time, timezone, and manual clock override. |
 | `/status.json` | The same status as `/`, machine-readable. |
@@ -176,19 +176,48 @@ holding it in RAM.
 
 ### History Plot
 
-Counter value plotted against date, with window buttons for 1 month, 3 months,
-6 months, 1 year, and full history (full is the default).
+A green/red **candlestick chart**, one candle per day, in the style of a stock
+chart. Window buttons cover 1 month, 3 months, 6 months, 1 year, and full
+history (full is the default).
+
+The counter maps onto OHLC naturally:
+
+| | |
+|---|---|
+| **Open** | the counter's value entering the day |
+| **High / Low** | its extremes during the day (the thin wick) |
+| **Close** | where it ended (the body, together with open) |
+| **Green** | closed higher than it opened |
+| **Red** | closed lower |
+| **Grey** | net unchanged &mdash; a flat tick, the stock-chart "doji" |
+
+The opening value is derived from the day's first entry as `value - step`
+rather than by carrying forward the previous day's close. Both give the same
+answer for a continuous log, but the local derivation stays correct if the log
+has a gap (a swapped card, say).
+
+**Days with no counter changes are skipped**, exactly as a stock chart skips
+non-trading days. The x axis therefore steps from one active day to the next
+rather than being linear in time, which is why its labels are the dates of the
+first, middle, and last candle instead of an even time interpolation. Without
+this, a year window containing a dozen changes would be 365 slots of mostly
+nothing.
+
+Windows longer than 180 active days group consecutive days into one candle
+(open of the first day, close of the last, extremes across all of them), and
+the page reports the grouping. That's the candlestick equivalent of the weekly
+or monthly candles a stock chart switches to when zoomed out &mdash; 180 candles
+is about where a body stays wide enough to read across a ~900 px plot.
 
 The chart is **server-rendered inline SVG** &mdash; no JavaScript, no charting
 library, nothing fetched from a CDN. A local device whose page only works when
 the browser has internet access would fail in exactly the situation you'd most
 want it.
 
-The log is scanned twice rather than buffered: the first pass counts entries and
-finds the axis ranges, the second emits a decimated polyline (capped at 400
-points, which is more than a ~900 px wide plot can show anyway). Peak memory
-stays flat however large the log grows, which is the same reason the data page
-reads only a window from the end.
+The log is scanned twice rather than buffered: the first pass counts active days
+and finds the value range, the second aggregates each bucket and streams its
+candle straight out. Peak memory stays flat however large the log grows, which
+is the same reason the data page reads only a window from the end.
 
 Entries logged as `TIME_NOT_SET` can't be placed on a time axis, so they're
 skipped and the count of them is reported under the chart &mdash; they're still
@@ -319,10 +348,13 @@ bytes) and 15.2% RAM**. The host-side image/metadata pipeline
 - **Counter steps**: each of the ten buttons moves the counter by its own
   amount and logs one line with that step (`+5`, `-3`, ...); `POST /counter`
   with `d=0` or `d=9` is rejected with a 400.
-- **History Plot**: the line matches the values on History Data, the window
-  buttons narrow the range, and the axis labels read correctly. The plot
-  geometry (bounds, axis inversion, decimation, flat-value and single-timestamp
-  edge cases) was checked off-device, but not the rendered result.
+- **History Plot**: candle colours match the direction of each day's net change
+  on History Data, the window buttons narrow the range, and the axis labels read
+  correctly. The geometry was verified off-device by porting the same math to a
+  host script and rendering synthetic logs in a browser (bounds, wick spanning
+  the body, colour vs. direction, candles chaining open == previous close,
+  multi-day bucketing, single-day, flat-day, and narrow-range cases) &mdash; but
+  the page has not been seen served from the frame itself.
 - **Clock**: correct Central time within ~30 s of boot — in summer the offset
   must be **−05:00 (CDT)**, which is what actually tests the DST rules.
 - **Card eject/reinsert**, and a scheduled refresh with no card (must skip
