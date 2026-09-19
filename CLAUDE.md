@@ -22,3 +22,5 @@ Each segment's CLAUDE.md is the authoritative source for that segment's conventi
 ## Commits
 
 The user makes all commits themselves — don't `git commit` (or stage/push) unprompted. When asked for a commit message, generate one to hand back for the user to use themselves; don't run `git commit` with it unless explicitly told to.
+
+Before staging or pushing, check every file that wasn't created in-session for copyright or redistribution limits — downloaded media, sample or test data, subtitle files, datasets, fonts, images, vendored code. The root `LICENSE` covers the whole monorepo, so committing a file implicitly republishes it under MIT, whether or not that's ours to grant. Permissively licensed third-party code is fine to vendor (see `arduino-projects/libraries/`); content we don't hold redistribution rights to is not — keep it out with a scoped `.gitignore` and point the subproject README at the location instead (`python-projects/subtitle_player/` is the pattern). Raise it *before* the push: undoing it afterwards means rewriting published history and force-pushing.
