@@ -21,6 +21,8 @@ devices:
     interval_minutes: 120
     wake_hours: ["07:00", "22:00"]  # local; outside these the frame sleeps till the next start
     tuning:                     # overrides the pipeline's defaults; per-photo overrides win
-      saturation: 1.2
+      saturation: 1.2           # 1.0 = unchanged
       contrast: 1.1
-      gamma: 1.0
+      brightness: 1.0
+      gamma: 1.0                # <1 darkens midtones, >1 lightens
+      quality: 92               # JPEG quality sent to the frame
