@@ -9,7 +9,7 @@ from __future__ import annotations
 from PIL import Image
 
 from . import register
-from .base import Pipeline, apply_tuning, cover_crop, encode_jpeg, resize_lanczos, rotate_cw
+from .base import Pipeline, apply_tuning, cover_crop, draw_battery, encode_jpeg, resize_lanczos, rotate_cw
 
 # Nominal Spectra 6 inks. The real pigments are duller than these; good enough
 # for a preview, not for colour-accurate simulation.
@@ -31,6 +31,7 @@ class Bloomin8Spectra6(Pipeline):
     name = "bloomin8_spectra6"
     version = "1"
     file_suffix = "_L.jpg"
+    color = True
     default_params = {"saturation": 1.2, "contrast": 1.1, "brightness": 1.0,
                       "gamma": 1.0, "quality": 92}
 
@@ -41,6 +42,8 @@ class Bloomin8Spectra6(Pipeline):
 
     def prepare(self, img, device, params, focal=(0.5, 0.5)) -> bytes:
         img = self._tuned(img, device, params, focal)
+        if params.get("battery_overlay") is not None:
+            img = draw_battery(img, params["battery_overlay"], self.color)
         img = rotate_cw(img, device.output_rotation)
         return encode_jpeg(img, int(params["quality"]))
 

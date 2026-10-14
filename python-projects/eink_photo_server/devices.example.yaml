@@ -20,6 +20,10 @@ devices:
     image_secret: CHANGE_ME_IMAGE_SECRET
     interval_minutes: 120
     wake_hours: ["07:00", "22:00"]  # local; outside these the frame sleeps till the next start
+    # Battery % in the image's upper-right corner (as mounted), from the frame's
+    # latest report: none (no battery monitor), always, or low (only below 10%).
+    # Below 10% it's red on colour panels, otherwise black.
+    battery_monitor: always
     tuning:                     # overrides the pipeline's defaults; per-photo overrides win
       saturation: 1.2           # 1.0 = unchanged
       contrast: 1.1

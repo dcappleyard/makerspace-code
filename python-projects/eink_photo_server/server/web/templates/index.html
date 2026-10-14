@@ -19,7 +19,7 @@
 <div class="card">
   <div class="row">
     <h3>{{ dev.name }}</h3>
-    <span class="muted">{{ dev.protocol }} · {{ dev.pipeline }} · {{ dev.width }}×{{ dev.height }} · rot {{ dev.output_rotation }}° · every {{ dev.interval_minutes }} min
+    <span class="muted">{{ dev.protocol }} · {{ dev.pipeline }} · {{ dev.width }}×{{ dev.height }} · rot {{ dev.output_rotation }}° · every {{ dev.interval_minutes }} min · battery overlay: {{ dev.battery_monitor }}
       {% if dev.wake_start %}· awake {{ dev.wake_start.strftime("%H:%M") }}–{{ dev.wake_end.strftime("%H:%M") }}{% endif %}</span>
     {% if st.paused %}<span class="warn">PAUSED</span>{% endif %}
     <form method="post" action="/ui/device/{{ dev.id }}/pause"><button>{{ "Resume" if st.paused else "Pause" }}</button></form>

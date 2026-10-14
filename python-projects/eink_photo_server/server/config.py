@@ -25,6 +25,16 @@ def parse_hhmm(s: str) -> time:
     return time(int(h), int(m))
 
 
+BATTERY_MONITORS = ("none", "always", "low")
+
+
+def _battery_monitor(d: dict) -> str:
+    mode = str(d.get("battery_monitor", "none")).lower()
+    if mode not in BATTERY_MONITORS:
+        raise ValueError(f"device {d.get('id')}: battery_monitor must be one of {', '.join(BATTERY_MONITORS)}")
+    return mode
+
+
 @dataclass
 class Device:
     id: str
@@ -40,6 +50,8 @@ class Device:
     wake_end: time | None = None
     tuning: dict = field(default_factory=dict)
     name: str = ""
+    # Battery % overlay: "none" (no monitor), "always", or "low" (only below LOW_BATTERY).
+    battery_monitor: str = "none"
 
     @classmethod
     def from_dict(cls, d: dict) -> Device:
@@ -58,6 +70,7 @@ class Device:
             wake_start=parse_hhmm(wake[0]) if wake[0] else None,
             wake_end=parse_hhmm(wake[1]) if wake[1] else None,
             tuning=dict(d.get("tuning") or {}),
+            battery_monitor=_battery_monitor(d),
         )
 
 

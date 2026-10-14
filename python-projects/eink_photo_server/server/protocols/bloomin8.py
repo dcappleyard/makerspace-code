@@ -42,9 +42,9 @@ def _device_for_token(token: str):
                  if d.protocol == PROTOCOL and token and d.token == token), None)
 
 
-def image_url(request: Request, device, photo) -> str:
+def image_url(request: Request, device, photo, battery: int | None = None) -> str:
     base = cfg.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
-    return f"{base}/image/{device.image_secret}/{prepare.image_name(device, photo)}"
+    return f"{base}/image/{device.image_secret}/{prepare.image_name(device, photo, battery)}"
 
 
 @router.get("/eink_pull")
@@ -72,6 +72,8 @@ def eink_pull(request: Request):
             "UPDATE device_state SET battery = COALESCE(?, battery), last_pull_at = ?, hw_device_id = COALESCE(?, hw_device_id) WHERE device_id = ?",
             (battery, now.isoformat(), q.get("device_id"), device.id),
         )
+        # This pull's reading (or the last known one) goes on the image it's served.
+        known_battery = db.state(conn, device.id)["battery"]
         photo_id, reason = schedule.choose(conn, device, now)
         next_cron = schedule.iso_z(schedule.next_wake(conn, device, now))
         photo = db.photo(conn, photo_id) if photo_id else None
@@ -84,12 +86,12 @@ def eink_pull(request: Request):
         return _body(204, f"No image to show ({reason})", data={"next_cron_time": next_cron})
 
     try:
-        prepare.get_prepared(device, photo)
+        prepare.get_prepared(device, photo, known_battery)
     except Exception:
         log.exception("failed to prepare photo %s for %s", photo["id"], device.id)
         return _body(500, "Failed to prepare image")
 
-    url = image_url(request, device, photo)
+    url = image_url(request, device, photo, known_battery)
     with db.tx() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO pulls (pull_id, device_id, photo_id, image_url, at, battery) VALUES (?,?,?,?,?,?)",
@@ -142,9 +144,15 @@ def image(secret: str, name: str):
     pipe = pipelines.get(device.pipeline)
     with db.tx() as conn:
         photo = db.photo(conn, photo_id)
-    # Only serve the version the URL names; a stale URL (tuning changed since) 404s.
-    if not photo or suffix != pipe.file_suffix or prepare.cache_key(device, photo) != key:
+        battery = db.state(conn, device.id)["battery"]
+    if not photo or suffix != pipe.file_suffix:
         return Response(status_code=404)
-    path = prepare.get_prepared(device, photo)
+    path = prepare.cached_path(device, key)
+    if not path.exists():
+        # Cache was cleared: rebuild, but only if the URL still names the current
+        # version (a stale URL -- tuning or battery changed since -- 404s).
+        if prepare.cache_key(device, photo, battery) != key:
+            return Response(status_code=404)
+        path = prepare.get_prepared(device, photo, battery)
     log.info("image %s -> %s (%d bytes)", device.id, name, path.stat().st_size)
     return FileResponse(path, media_type=pipe.content_type)

@@ -18,6 +18,7 @@ class Pipeline:
     version: str = "1"
     file_suffix: str = "_L.jpg"
     content_type: str = "image/jpeg"
+    color: bool = False   # panel can show colour (e.g. red low-battery overlay)
     default_params: dict = {}
 
     def prepare(self, img: Image.Image, device, params: dict,
@@ -88,6 +89,30 @@ def apply_tuning(img: Image.Image, params: dict) -> Image.Image:
                           ("saturation", ImageEnhance.Color)):
         if params.get(key, 1.0) != 1.0:
             img = enhancer(img).enhance(params[key])
+    return img
+
+
+LOW_BATTERY = 10  # percent; below this the overlay is red (and shown in "low" mode)
+
+
+def draw_battery(img: Image.Image, pct: int, color: bool, height: int = 20,
+                 low: int = LOW_BATTERY) -> Image.Image:
+    """Draw 'NN%' in a small white box in the upper-right corner (as mounted).
+    Red when below `low` on colour panels, black otherwise."""
+    from PIL import ImageDraw, ImageFont  # local: only needed when overlaying
+    img = img.copy()
+    d = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=round(height * 0.8))
+    text = f"{pct}%"
+    left, top, right, bottom = d.textbbox((0, 0), text, font=font)
+    pad = max(round(height * 0.2), 2)
+    box_w = right - left + 2 * pad
+    x1, y0 = img.width - 4, 4
+    x0, y1 = x1 - box_w, y0 + height
+    d.rectangle([x0, y0, x1, y1], fill="white")
+    fill = (255, 0, 0) if color and pct < low else (0, 0, 0)
+    # Centre the glyphs' ink box vertically inside the white box.
+    d.text((x0 + pad - left, y0 + (height - (bottom - top)) / 2 - top), text, fill=fill, font=font)
     return img
 
 

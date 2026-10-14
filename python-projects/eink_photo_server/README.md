@@ -44,6 +44,16 @@ On each pull, the server answers based on the time *now*, never at an exact time
 
 `next_cron_time` is set to now + `interval_minutes`. If that falls outside `wake_hours`, it moves to the next wake start. If a window opens before then, it moves to that window's start.
 
+## Battery overlay
+Set `battery_monitor` per device in `devices.yaml`:
+- `none` (the default): no overlay. Use this for frames without a battery monitor.
+- `always`: always overlay the battery %.
+- `low`: overlay only when the battery is below 10%.
+
+The overlay is a ~20 px "NN%" in a small white box in the upper-right corner, as the frame is mounted. Below 10% it's red on colour panels, otherwise black.
+
+It shows the reading the frame sent with the same pull, or the last known reading if that pull didn't include one. The reading is part of the image's cache key, so a new value produces a new file and URL.
+
 ## Test cards (tuning A/B/C on the real panel)
 Open the **Test card** tab. It renders one image at the frame's resolution, split into three columns (A/B/C), and each column is tuned with its own saturation, contrast, brightness and gamma.
 
