@@ -1,0 +1,26 @@
+# Copy to <DATA_DIR>/devices.yaml (./data/devices.yaml with docker compose).
+# Static per-device config; runtime state (playlist, battery, ...) lives in db.sqlite.
+timezone: America/Chicago
+
+devices:
+  - id: living_room_73          # our name for the frame; used in URLs/UI
+    name: Living room 7.3"
+    protocol: bloomin8          # server/protocols/<name>.py
+    pipeline: bloomin8_spectra6 # server/pipelines/<module>.py, by its `name`
+    width: 800                  # as mounted on the wall
+    height: 480
+    # Rotation (degrees clockwise) applied after cropping, before encoding.
+    # The reference server stores landscape images rotated 90 (portrait-shaped
+    # file, still named _L.jpg). Confirm on the real panel and adjust.
+    output_rotation: 90
+    # Sent by the frame as X-Access-Token; also identifies the device.
+    # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+    token: CHANGE_ME_TOKEN
+    # Path secret in image URLs (the frame may not send the header for the download).
+    image_secret: CHANGE_ME_IMAGE_SECRET
+    interval_minutes: 120
+    wake_hours: ["07:00", "22:00"]  # local; outside these the frame sleeps till the next start
+    tuning:                     # overrides the pipeline's defaults; per-photo overrides win
+      saturation: 1.2
+      contrast: 1.1
+      gamma: 1.0

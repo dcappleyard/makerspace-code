@@ -1,0 +1,14 @@
+services:
+  eink-photo-server:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: America/Chicago
+      # URL the frames use to reach this server (they're on the IoT VLAN).
+      PUBLIC_BASE_URL: http://192.168.1.10:8080
+      # Protects the web UI (user name is ignored). Frame endpoints stay open.
+      ADMIN_PASSWORD: ""
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+# Dev override: mounts the source into the container and auto-reloads on save.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Rebuild (--build) only when requirements.txt changes.
+services:
+  eink-photo-server:
+    volumes:
+      - ./server:/app/server
+    command: ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8080",
+              "--proxy-headers", "--reload", "--reload-dir", "/app/server"]

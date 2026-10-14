@@ -1,0 +1,60 @@
+"""Bloomin8 (E Ink Spectra 6) pipeline.
+
+The frame dithers to its six inks itself, so we hand it a clean, slightly punchy
+full-colour JPEG at native resolution -- no dithering here. preview() simulates
+the panel's dither so the web UI can show roughly what will appear.
+"""
+from __future__ import annotations
+
+from PIL import Image, ImageEnhance
+
+from . import register
+from .base import Pipeline, cover_crop, encode_jpeg, resize_lanczos, rotate_cw
+
+# Nominal Spectra 6 inks. The real pigments are duller than these; good enough
+# for a preview, not for colour-accurate simulation.
+SPECTRA6 = [
+    (0, 0, 0), (255, 255, 255), (200, 30, 30),
+    (240, 210, 0), (30, 60, 170), (40, 130, 60),
+]
+
+
+def _palette_image() -> Image.Image:
+    pal = Image.new("P", (1, 1))
+    flat = [c for rgb in SPECTRA6 for c in rgb]
+    pal.putpalette(flat + flat[:3] * (256 - len(SPECTRA6)))
+    return pal
+
+
+@register
+class Bloomin8Spectra6(Pipeline):
+    name = "bloomin8_spectra6"
+    version = "1"
+    file_suffix = "_L.jpg"
+    default_params = {"saturation": 1.2, "contrast": 1.1, "brightness": 1.0,
+                      "gamma": 1.0, "quality": 92}
+
+    def _tuned(self, img, device, params, focal):
+        img = cover_crop(img, device.width, device.height, focal)
+        img = resize_lanczos(img, device.width, device.height)
+        if params["gamma"] != 1.0:
+            inv = 1.0 / params["gamma"]
+            lut = [round(255 * (i / 255) ** inv) for i in range(256)]
+            img = img.point(lut * 3)
+        if params["brightness"] != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(params["brightness"])
+        if params["contrast"] != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(params["contrast"])
+        if params["saturation"] != 1.0:
+            img = ImageEnhance.Color(img).enhance(params["saturation"])
+        return img
+
+    def prepare(self, img, device, params, focal=(0.5, 0.5)) -> bytes:
+        img = self._tuned(img, device, params, focal)
+        img = rotate_cw(img, device.output_rotation)
+        return encode_jpeg(img, int(params["quality"]))
+
+    def preview(self, img, device, params, focal=(0.5, 0.5)):
+        img = self._tuned(img, device, params, focal)
+        return img.quantize(palette=_palette_image(),
+                            dither=Image.Dither.FLOYDSTEINBERG).convert("RGB")

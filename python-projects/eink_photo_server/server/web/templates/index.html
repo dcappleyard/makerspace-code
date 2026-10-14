@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eInk Photo Server</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#222; --muted:#777; --line:#ddd; --accent:#2a6; --warn:#c63; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:24px 0 8px; } h3 { font-size:15px; margin:0; }
+  .muted { color:var(--muted); } .warn { color:var(--warn); font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .status { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:4px 16px; margin:8px 0; }
+  table { border-collapse:collapse; width:100%; } td { padding:4px 6px; border-top:1px solid var(--line); vertical-align:middle; }
+  img.t { height:48px; border-radius:3px; display:block; }
+  input[type=time] { width:7.5em; } input.num { width:4.5em; }
+  button { cursor:pointer; padding:3px 8px; } form { display:inline; margin:0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+  .focal { position:relative; cursor:crosshair; }
+  .focal img { width:100%; display:block; border-radius:4px; }
+  .focal .dot { position:absolute; width:12px; height:12px; margin:-6px; border:2px solid #fff; border-radius:50%; box-shadow:0 0 0 1px #000; pointer-events:none; }
+  .previews { display:flex; gap:8px; flex-wrap:wrap; } .previews img { max-width:min(400px,100%); border:1px solid var(--line); }
+</style>
+</head>
+<body>
+<h1>eInk Photo Server</h1>
+<div class="row muted">
+  Timezone {{ tz }} · pipelines: {{ pipelines|join(", ") }}
+  <form method="post" action="/ui/reload"><button>Reload devices.yaml</button></form>
+</div>
+
+<h2>Frames</h2>
+{% if not devices %}<p class="muted">No devices configured — add some to devices.yaml and reload.</p>{% endif %}
+{% for d in devices %}{% set dev, st = d.dev, d.state %}
+<div class="card">
+  <div class="row">
+    <h3>{{ dev.name }}</h3>
+    <span class="muted">{{ dev.protocol }} · {{ dev.pipeline }} · {{ dev.width }}×{{ dev.height }} · rot {{ dev.output_rotation }}° · every {{ dev.interval_minutes }} min
+      {% if dev.wake_start %}· awake {{ dev.wake_start.strftime("%H:%M") }}–{{ dev.wake_end.strftime("%H:%M") }}{% endif %}</span>
+    {% if st.paused %}<span class="warn">PAUSED</span>{% endif %}
+    <form method="post" action="/ui/device/{{ dev.id }}/pause"><button>{{ "Resume" if st.paused else "Pause" }}</button></form>
+  </div>
+  <div class="status">
+    <div>Battery: <b>{{ st.battery if st.battery is not none else "—" }}{% if st.battery is not none %}%{% endif %}</b></div>
+    <div>Last pull: {{ st.last_pull_at|local }}</div>
+    <div>Last confirmed: {{ st.last_success_at|local }}</div>
+    <div>Showing: {% if st.last_photo_id and st.last_photo_id in photo_by_id %}#{{ st.last_photo_id }} {{ photo_by_id[st.last_photo_id].filename }}{% else %}—{% endif %}</div>
+    {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
+  </div>
+  <div class="muted">Tuning: {% for k, v in d.params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+
+  <table>
+    {% for it in d.playlist %}{% set p = photo_by_id.get(it.photo_id) %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{% if p %}<img class="t" src="/ui/thumb/{{ p.id }}" alt="">{% endif %}</td>
+      <td>{{ p.filename if p else "?" }}{% if st.cursor == it.id %} <span class="muted">← last picked</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/ui/item/{{ it.id }}/window" class="row">
+          <input type="time" name="start" value="{{ it.window_start or '' }}"> –
+          <input type="time" name="end" value="{{ it.window_end or '' }}">
+          <button title="Blank both to clear">Set window</button>
+        </form>
+      </td>
+      <td class="row">
+        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="up"><button>↑</button></form>
+        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="down"><button>↓</button></form>
+        <form method="post" action="/ui/item/{{ it.id }}/remove"><button>✕</button></form>
+        {% if p %}<a href="/ui/preview/{{ dev.id }}/{{ p.id }}/prepared" target="_blank">file</a>
+        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/sim" target="_blank">sim</a>{% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td class="muted">Playlist is empty — add photos from the library below.</td></tr>{% endfor %}
+  </table>
+
+  {% if st.last_photo_id and st.last_photo_id in photo_by_id %}
+  <details><summary>Current image previews</summary>
+    <div class="previews">
+      <img src="/ui/preview/{{ dev.id }}/{{ st.last_photo_id }}/sim" alt="simulated panel" title="Spectra 6 dither simulation">
+      <img src="/ui/preview/{{ dev.id }}/{{ st.last_photo_id }}/prepared" alt="file sent to frame" title="File sent to the frame (rotated as stored)">
+    </div>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+
+<h2>Library</h2>
+<div class="card">
+  <form method="post" action="/ui/upload" enctype="multipart/form-data" class="row">
+    <input type="file" name="files" accept="image/*" multiple required>
+    <button>Upload</button>
+  </form>
+</div>
+<p class="muted">Click a photo to set its crop focal point.</p>
+<div class="grid">
+{% for p in photos %}
+  <div class="card">
+    <form method="post" action="/ui/photo/{{ p.id }}/focal" class="focal" onclick="setFocal(event, this)">
+      <img src="/ui/thumb/{{ p.id }}" alt="{{ p.filename }}">
+      <span class="dot" style="left:{{ p.focal_x * 100 }}%; top:{{ p.focal_y * 100 }}%"></span>
+      <input type="hidden" name="x"><input type="hidden" name="y">
+    </form>
+    <div class="muted">#{{ p.id }} {{ p.filename }} · {{ p.width }}×{{ p.height }}</div>
+    {% if devices %}
+    <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/add'">
+      <input type="hidden" name="photo_id" value="{{ p.id }}">
+      <select name="dev">{% for d in devices %}<option value="{{ d.dev.id }}">{{ d.dev.name }}</option>{% endfor %}</select>
+      <button>Add to playlist</button>
+    </form>
+    {% endif %}
+    {% set pp = json.loads(p.params_json) %}
+    <details><summary>Per-photo tuning{% if pp %} ({{ pp|length }}){% endif %}</summary>
+      <form method="post" action="/ui/photo/{{ p.id }}/tuning">
+        {% for k in tuning_keys %}<label>{{ k }} <input class="num" name="{{ k }}" value="{{ pp.get(k, '') }}" placeholder="dev"></label><br>{% endfor %}
+        <button>Save</button>
+      </form>
+    </details>
+    <form method="post" action="/ui/photo/{{ p.id }}/delete" onsubmit="return confirm('Delete this photo?')"><button>Delete</button></form>
+  </div>
+{% else %}<p class="muted">No photos yet.</p>{% endfor %}
+</div>
+
+<script>
+function setFocal(ev, form) {
+  const r = form.querySelector("img").getBoundingClientRect();
+  form.x.value = ((ev.clientX - r.left) / r.width).toFixed(3);
+  form.y.value = ((ev.clientY - r.top) / r.height).toFixed(3);
+  form.submit();
+}
+</script>
+</body>
+</html>
