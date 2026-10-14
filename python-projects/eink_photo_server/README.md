@@ -82,6 +82,7 @@ This PUTs `/upstream/pull_settings` with the device token and a first wake 2 min
 
 - **On the Pi:** run it inside the container with `docker compose exec eink-photo-server python -m server.tools.configure_frame …`. That container already has `/data`.
 - **Locally:** prefix the command with `DATA_DIR=./data`.
+- **If the server can't reach the frames' VLAN:** this happens when the firewall only allows IoT → server. Add `--print-curl` and run the printed command from a machine that can reach the frame, e.g. the one running the Bloomin8 app.
 
 ## Data (`DATA_DIR`, `/data` in Docker; git-ignored)
 - `devices.yaml`: device registry. It holds the tokens, so it stays out of git.

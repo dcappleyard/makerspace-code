@@ -31,6 +31,12 @@ def _body(status: int, message: str, **extra) -> JSONResponse:
     return JSONResponse(body, headers={"X-Server-Timestamp": schedule.iso_z(schedule.utc_now())})
 
 
+def _mask(token: str | None) -> str:
+    if token is None:
+        return "<missing>"
+    return f"{token[:4]}…({len(token)} chars)" if len(token) > 4 else f"<{len(token)} chars>"
+
+
 def _device_for_token(token: str):
     return next((d for d in cfg.config.devices.values()
                  if d.protocol == PROTOCOL and token and d.token == token), None)
@@ -48,7 +54,9 @@ def eink_pull(request: Request):
     # for reference only, so it doesn't need to be known ahead of time.
     device = _device_for_token(request.headers.get("X-Access-Token", ""))
     if not device:
-        log.warning("eink_pull with bad token from %s (device_id=%s)", request.client.host, q.get("device_id"))
+        sent = request.headers.get("X-Access-Token")
+        log.warning("eink_pull with bad token from %s (device_id=%s, X-Access-Token=%s, headers=%s)",
+                    request.client.host, q.get("device_id"), _mask(sent), sorted(request.headers.keys()))
         return _body(401, "Unauthorized")
 
     now = schedule.utc_now()

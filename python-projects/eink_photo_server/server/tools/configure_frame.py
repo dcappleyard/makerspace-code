@@ -5,11 +5,16 @@
 Reads the device's token from devices.yaml and PUTs /upstream/pull_settings on
 the frame, with the first wake a couple of minutes from now. The frame must be
 awake (e.g. just woken via its button/app) to accept the request.
+
+If the server can't reach the frame's VLAN, use --print-curl and run the printed
+command from a machine that can (e.g. the workstation the Bloomin8 app runs on).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +28,8 @@ def main():
     ap.add_argument("--server", default=cfg.PUBLIC_BASE_URL, help="base URL the frame should pull from")
     ap.add_argument("--first-wake-minutes", type=int, default=2)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--print-curl", action="store_true",
+                    help="print an equivalent curl command (includes the token) instead of sending")
     args = ap.parse_args()
 
     dev = cfg.config.devices.get(args.device_id)
@@ -39,13 +46,24 @@ def main():
         "cron_time": first.isoformat().replace("+00:00", "Z"),
     }
     url = f"http://{args.frame_ip}/upstream/pull_settings"
+    if args.print_curl:
+        # cron_time is fixed when printed; run it within a minute or so.
+        print(f"curl -m 10 -X PUT {url} -H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}")
+        return
     print(f"PUT {url}\n{json.dumps({**body, 'token': '***'}, indent=2)}")
     if args.dry_run:
         return
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="PUT",
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        print(resp.status, resp.read().decode(errors="replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            print(resp.status, resp.read().decode(errors="replace"))
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise SystemExit(
+            f"couldn't reach the frame at {args.frame_ip}: {getattr(e, 'reason', e)}\n"
+            "Is it awake? Can this machine reach its VLAN (firewall)? "
+            "If not, rerun with --print-curl and send it from a machine that can."
+        )
 
 
 if __name__ == "__main__":
