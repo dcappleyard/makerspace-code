@@ -44,6 +44,28 @@ On each pull, the server answers based on the time *now*, never at an exact time
 
 `next_cron_time` is set to now + `interval_minutes`. If that falls outside `wake_hours`, it moves to the next wake start. If a window opens before then, it moves to that window's start.
 
+## Test cards (tuning A/B/C on the real panel)
+Open the **Test card** tab. It renders one image at the frame's resolution, split into three columns (A/B/C), and each column is tuned with its own saturation, contrast, brightness and gamma.
+
+- **Color card:**
+  - Spectra 6 ink swatches
+  - hue sweeps at full and half saturation
+  - gray ramp and an 11-step wedge
+  - skin and pastel patches
+  - ink tint ramps
+- **Black & white card:**
+  - 16-step wedge and a smooth ramp
+  - 1-px lines and checkerboards
+  - text sizes
+  - shadow and highlight steps
+
+Pure ink swatches barely respond to tuning, so judge the differences on the ramps, tints and pastels. Optionally pick a library photo for a "photo strip": the same crop of it appears in every column.
+
+- **Save to library** stores the card as a normal photo. It gets neutral per-photo tuning, so the device's tuning isn't applied on top.
+- **Save & show next** also queues the card for the frame's next pull. Any library photo has a **Show next** button too. It's one shot: after that pull the playlist resumes.
+- To see it right away, wake the frame and resend its setup (`configure_frame --print-curl`).
+- When you've picked a winner, copy that column's values into `devices.yaml` → `tuning`.
+
 ## Running
 
 ### Docker (Pi)

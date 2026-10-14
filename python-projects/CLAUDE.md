@@ -10,8 +10,8 @@ Standalone `python3` scripts — no monorepo-wide package manager or virtualenv 
 - **`eink_photo_server/`**: a FastAPI service, run in Docker on a Raspberry Pi, that feeds the e-ink photo frames over a **pull** model.
   - **Structure:** each device in `devices.yaml` pairs a *protocol adapter* (`server/protocols/`, e.g. Bloomin8 `/eink_pull`) with an image *pipeline* (`server/pipelines/`, auto-registered via `@register`).
   - **Shared:** playlists with time windows, scheduling (`schedule.py`), and the prepared-image cache (`prepare.py`). The cache is keyed by source/pipeline version/geometry/tuning/focal point.
-  - **UI:** a single Jinja page (`server/web/`).
+  - **UI:** Jinja pages (`server/web/`), including a Test card tab. `testcards.py` renders 3-column A/B/C tuning cards, which are saved with neutral per-photo tuning. A one-shot "show next" override is stored in `device_state.queued_photo_id`.
   - **Data:** runtime data, including `devices.yaml` with its tokens, lives in the git-ignored `data/`.
   - **Extending:** new frame types (e.g. the planned ESP32 frame: pre-dithered, 4bpp-packed) = new protocol module + new pipeline module. The core doesn't change.
-  - **Deps:** `fastapi`, `uvicorn`, `Pillow`, `jinja2`, `python-multipart`, `PyYAML`. No test suite. Verify with the curl/TestClient flows in its README.
+  - **Deps:** `fastapi`, `uvicorn`, `Pillow`, `jinja2`, `python-multipart`, `PyYAML`. No test suite. Verify with the curl/TestClient flows in its README. Add new columns to existing tables via `db.MIGRATIONS`, because the Pi already has a live database.
 - **`internet_connection_logging/`** — `check_netlog.sh`, a **bash/awk** script (not Python, despite the parent folder) that analyzes `network_health_log.csv`. The process that generates that CSV lives outside this repo (e.g. a cron/launchd job), so this directory only contains the analysis side.

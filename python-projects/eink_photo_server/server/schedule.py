@@ -51,20 +51,25 @@ def _next_occurrence(t: time, after_local: datetime) -> datetime:
 def choose(conn, device, now: datetime) -> tuple[int | None, str]:
     """Return (photo_id or None, reason) and advance the cursor if appropriate."""
     st = db.state(conn, device.id)
+    queued = st["queued_photo_id"]
+    if queued and db.photo(conn, queued):
+        # One-shot "show next" override; wins over pause and leaves the cursor alone.
+        conn.execute("UPDATE device_state SET queued_photo_id = NULL WHERE device_id = ?", (device.id,))
+        return queued, "queued"
     if st["paused"]:
         return st["last_photo_id"], "paused"
-
-    items = db.playlist(conn, device.id)
-    if not items:
-        return None, "playlist empty"
 
     last = conn.execute(
         "SELECT * FROM pulls WHERE device_id = ? ORDER BY at DESC, rowid DESC LIMIT 1", (device.id,)
     ).fetchone()
     if (last and last["photo_id"] and not last["signaled_at"]
             and now - datetime.fromisoformat(last["at"]) < RETRY_GUARD
-            and any(it["photo_id"] == last["photo_id"] for it in items)):
+            and db.photo(conn, last["photo_id"])):
         return last["photo_id"], "retry of unconfirmed pull"
+
+    items = db.playlist(conn, device.id)
+    if not items:
+        return None, "playlist empty"
 
     local = now.astimezone(cfg.config.tz)
     windowed = [it for it in items if it["window_start"] and it["window_end"]]

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Card · eInk Photo Server</title>
+{% include "_style.html" %}
+<style>
+  .previews figure { margin:0; } .previews img { max-width:min(800px,100%); }
+</style>
+</head>
+<body>
+{% set page = "testcard" %}{% include "_nav.html" %}
+<p class="muted">Three columns, each tuned with its own parameters, rendered at the frame's resolution.
+  Saved cards bypass the device's tuning, so the panel shows exactly these A/B/C settings.</p>
+
+<form method="get" action="/testcard" class="card" style="display:block">
+  <div class="row">
+    <label>Frame <select name="device">{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if d.id == dev.id }}>{{ d.name }} ({{ d.width }}×{{ d.height }})</option>{% endfor %}</select></label>
+    <label>Card <select name="kind">{% for k in kinds %}<option value="{{ k }}" {{ "selected" if k == kind }}>{{ "Color" if k == "color" else "Black & white" }}</option>{% endfor %}</select></label>
+    <label>Photo strip <select name="photo_id"><option value="">— none —</option>{% for p in photos %}<option value="{{ p.id }}" {{ "selected" if photo and p.id == photo.id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}</select></label>
+  </div>
+  <table style="width:auto; margin-top:8px">
+    <tr><td></td>{% for k in tuning_keys %}<td class="muted">{{ k }}</td>{% endfor %}</tr>
+    {% for seg, params in segments %}
+    <tr><td><b>{{ seg }}</b></td>
+      {% for k in tuning_keys %}<td><input class="num" type="number" step="0.05" min="0" name="{{ seg }}_{{ k }}" value="{{ params[k] }}"></td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="row" style="margin-top:8px">
+    <button>Preview</button>
+    <button formmethod="post" formaction="/testcard/save">Save to library</button>
+    <button formmethod="post" formaction="/testcard/save" name="queue" value="1">Save &amp; show next on this frame</button>
+    <a href="/testcard?device={{ dev.id }}&amp;kind={{ kind }}">Reset values</a>
+  </div>
+  <p class="muted">Defaults: B = the frame's current tuning, A/C = lower/higher saturation and contrast.
+    To see a queued card right away, wake the frame and resend its setup (configure_frame --print-curl).</p>
+</form>
+
+<div class="previews">
+  <figure><img src="/testcard/render?{{ query }}" alt="test card"><figcaption class="muted">Card (as sent, before rotation)</figcaption></figure>
+  <figure><img src="/testcard/render?{{ query }}&amp;view=sim" alt="simulated panel"><figcaption class="muted">Spectra 6 dither simulation</figcaption></figure>
+</div>
+</body>
+</html>

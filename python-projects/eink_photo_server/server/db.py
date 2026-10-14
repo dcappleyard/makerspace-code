@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS device_state (
     battery         INTEGER,
     last_pull_at    TEXT,
     last_success_at TEXT,
-    hw_device_id    TEXT
+    hw_device_id    TEXT,
+    queued_photo_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS pulls (
     pull_id     TEXT NOT NULL,
@@ -52,6 +53,13 @@ CREATE TABLE IF NOT EXISTS pulls (
 );
 """
 
+# Columns added after a table was first created: (table, column, decl). CREATE
+# TABLE IF NOT EXISTS won't add them to an existing db, so init() does.
+MIGRATIONS = [
+    ("device_state", "hw_device_id", "TEXT"),
+    ("device_state", "queued_photo_id", "INTEGER"),
+]
+
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
@@ -63,6 +71,10 @@ def init() -> None:
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA foreign_keys = ON")
     _conn.executescript(SCHEMA)
+    for table, col, decl in MIGRATIONS:
+        have = {r["name"] for r in _conn.execute(f"PRAGMA table_info({table})")}
+        if col not in have:
+            _conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     _conn.commit()
 
 

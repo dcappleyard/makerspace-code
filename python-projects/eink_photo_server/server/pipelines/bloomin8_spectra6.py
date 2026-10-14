@@ -6,10 +6,10 @@ the panel's dither so the web UI can show roughly what will appear.
 """
 from __future__ import annotations
 
-from PIL import Image, ImageEnhance
+from PIL import Image
 
 from . import register
-from .base import Pipeline, cover_crop, encode_jpeg, resize_lanczos, rotate_cw
+from .base import Pipeline, apply_tuning, cover_crop, encode_jpeg, resize_lanczos, rotate_cw
 
 # Nominal Spectra 6 inks. The real pigments are duller than these; good enough
 # for a preview, not for colour-accurate simulation.
@@ -37,17 +37,7 @@ class Bloomin8Spectra6(Pipeline):
     def _tuned(self, img, device, params, focal):
         img = cover_crop(img, device.width, device.height, focal)
         img = resize_lanczos(img, device.width, device.height)
-        if params["gamma"] != 1.0:
-            inv = 1.0 / params["gamma"]
-            lut = [round(255 * (i / 255) ** inv) for i in range(256)]
-            img = img.point(lut * 3)
-        if params["brightness"] != 1.0:
-            img = ImageEnhance.Brightness(img).enhance(params["brightness"])
-        if params["contrast"] != 1.0:
-            img = ImageEnhance.Contrast(img).enhance(params["contrast"])
-        if params["saturation"] != 1.0:
-            img = ImageEnhance.Color(img).enhance(params["saturation"])
-        return img
+        return apply_tuning(img, params)
 
     def prepare(self, img, device, params, focal=(0.5, 0.5)) -> bytes:
         img = self._tuned(img, device, params, focal)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image, ImageCms, ImageOps
+from PIL import Image, ImageCms, ImageEnhance, ImageOps
 
 
 class Pipeline:
@@ -69,6 +69,26 @@ def cover_crop(img: Image.Image, w: int, h: int, focal=(0.5, 0.5)) -> Image.Imag
 
 def resize_lanczos(img: Image.Image, w: int, h: int) -> Image.Image:
     return img.resize((w, h), Image.Resampling.LANCZOS)
+
+
+# Tuning values that leave an image unchanged. Stored as a photo's per-photo
+# params to bypass device/pipeline tuning (e.g. for pre-tuned test cards).
+NEUTRAL_TUNING = {"saturation": 1.0, "contrast": 1.0, "brightness": 1.0, "gamma": 1.0}
+
+
+def apply_tuning(img: Image.Image, params: dict) -> Image.Image:
+    """Gamma -> brightness -> contrast -> saturation. Missing keys are neutral."""
+    gamma = params.get("gamma", 1.0)
+    if gamma != 1.0:
+        inv = 1.0 / gamma
+        lut = [round(255 * (i / 255) ** inv) for i in range(256)]
+        img = img.point(lut * len(img.getbands()))
+    for key, enhancer in (("brightness", ImageEnhance.Brightness),
+                          ("contrast", ImageEnhance.Contrast),
+                          ("saturation", ImageEnhance.Color)):
+        if params.get(key, 1.0) != 1.0:
+            img = enhancer(img).enhance(params[key])
+    return img
 
 
 def rotate_cw(img: Image.Image, degrees: int) -> Image.Image:

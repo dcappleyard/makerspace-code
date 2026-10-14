@@ -4,18 +4,21 @@ Every action is a form POST that redirects back to the page.
 """
 from __future__ import annotations
 
+import io
 import json
 import secrets
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from .. import config as cfg
-from .. import db, photos, pipelines, prepare
+from .. import db, photos, pipelines, prepare, testcards
+from ..pipelines.base import NEUTRAL_TUNING, load_oriented
 
 _basic = HTTPBasic(auto_error=False)
 
@@ -196,4 +199,102 @@ def item_window(item_id: int, start: str = Form(""), end: str = Form("")):
 @router.post("/ui/reload")
 def reload_config():
     cfg.reload()
+    return _back()
+
+
+@router.post("/ui/device/{device_id}/queue")
+def device_queue(device_id: str, photo_id: int | None = Form(None)):
+    """Serve this photo on the device's next pull (one shot). Empty photo_id clears it."""
+    _device(device_id)
+    with db.tx() as conn:
+        db.state(conn, device_id)
+        conn.execute("UPDATE device_state SET queued_photo_id = ? WHERE device_id = ?", (photo_id, device_id))
+    return _back()
+
+
+# --- Test cards -------------------------------------------------------------
+
+SEGMENTS = "ABC"
+# Starting offsets either side of the device's current tuning.
+_VARIANT = {"saturation": 0.2, "contrast": 0.1, "brightness": 0.0, "gamma": 0.0}
+
+
+def _card_args(form) -> tuple:
+    """(device, kind, photo row or None, segments) from query/form fields."""
+    dev = _device(form.get("device") or next(iter(cfg.config.devices), ""))
+    kind = form.get("kind") or "color"
+    if kind not in testcards.KINDS:
+        raise HTTPException(400, "unknown card kind")
+    photo = None
+    if form.get("photo_id"):
+        with db.tx() as conn:
+            photo = db.photo(conn, int(form["photo_id"]))
+    base = {**pipelines.get(dev.pipeline).default_params, **dev.tuning}
+    segments = []
+    for i, seg in enumerate(SEGMENTS):
+        params = {}
+        for k in TUNING_KEYS:
+            v = str(form.get(f"{seg}_{k}", "")).strip()
+            params[k] = float(v) if v else round(float(base.get(k, 1.0)) + (i - 1) * _VARIANT[k], 3)
+        segments.append(params)
+    return dev, kind, photo, segments
+
+
+def _render(form):
+    dev, kind, photo, segments = _card_args(form)
+    photo_img = load_oriented(photos.original_path(photo)) if photo else None
+    focal = (photo["focal_x"], photo["focal_y"]) if photo else (0.5, 0.5)
+    return dev, kind, testcards.render_card(kind, dev.width, dev.height, segments, photo_img, focal)
+
+
+def _png(img) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+@router.get("/testcard")
+def testcard_page(request: Request):
+    q = request.query_params
+    if not cfg.config.devices:
+        raise HTTPException(400, "no devices configured")
+    dev, kind, photo, segments = _card_args(q)
+    with db.tx() as conn:
+        all_photos = conn.execute("SELECT id, filename FROM photos ORDER BY id DESC").fetchall()
+    return templates.TemplateResponse(request, "testcard.html", {
+        "devices": list(cfg.config.devices.values()),
+        "dev": dev, "kind": kind, "photo": photo, "photos": all_photos,
+        "segments": list(zip(SEGMENTS, segments)), "tuning_keys": TUNING_KEYS,
+        "kinds": testcards.KINDS,
+        "query": urlencode({
+            "device": dev.id, "kind": kind, "photo_id": photo["id"] if photo else "",
+            **{f"{seg}_{k}": params[k] for seg, params in zip(SEGMENTS, segments) for k in TUNING_KEYS},
+        }),
+    })
+
+
+@router.get("/testcard/render")
+def testcard_render(request: Request, view: str = "card"):
+    dev, kind, card = _render(request.query_params)
+    if view == "sim":
+        pipe = pipelines.get(dev.pipeline)
+        sim = pipe.preview(card, dev, {**pipe.default_params, **NEUTRAL_TUNING})
+        if sim is None:
+            raise HTTPException(404, "pipeline has no preview")
+        card = sim
+    return Response(_png(card), media_type="image/png")
+
+
+@router.post("/testcard/save")
+async def testcard_save(request: Request):
+    form = await request.form()
+    dev, kind, card = _render(form)
+    name = f"testcard-{kind}-{datetime.now(cfg.config.tz):%Y%m%d-%H%M}.png"
+    photo_id = photos.ingest(name, _png(card))
+    with db.tx() as conn:
+        # The card is already tuned per column; bypass device/pipeline tuning.
+        conn.execute("UPDATE photos SET params_json = ? WHERE id = ?", (json.dumps(NEUTRAL_TUNING), photo_id))
+        if form.get("queue"):
+            db.state(conn, dev.id)
+            conn.execute("UPDATE device_state SET queued_photo_id = ? WHERE device_id = ?", (photo_id, dev.id))
     return _back()

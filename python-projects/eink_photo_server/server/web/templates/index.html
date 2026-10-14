@@ -4,28 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>eInk Photo Server</title>
-<style>
-  :root { --bg:#f6f5f2; --card:#fff; --ink:#222; --muted:#777; --line:#ddd; --accent:#2a6; --warn:#c63; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:16px; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
-  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:24px 0 8px; } h3 { font-size:15px; margin:0; }
-  .muted { color:var(--muted); } .warn { color:var(--warn); font-weight:600; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .status { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:4px 16px; margin:8px 0; }
-  table { border-collapse:collapse; width:100%; } td { padding:4px 6px; border-top:1px solid var(--line); vertical-align:middle; }
-  img.t { height:48px; border-radius:3px; display:block; }
-  input[type=time] { width:7.5em; } input.num { width:4.5em; }
-  button { cursor:pointer; padding:3px 8px; } form { display:inline; margin:0; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
-  .focal { position:relative; cursor:crosshair; }
-  .focal img { width:100%; display:block; border-radius:4px; }
-  .focal .dot { position:absolute; width:12px; height:12px; margin:-6px; border:2px solid #fff; border-radius:50%; box-shadow:0 0 0 1px #000; pointer-events:none; }
-  .previews { display:flex; gap:8px; flex-wrap:wrap; } .previews img { max-width:min(400px,100%); border:1px solid var(--line); }
-</style>
+{% include "_style.html" %}
 </head>
 <body>
-<h1>eInk Photo Server</h1>
+{% set page = "home" %}{% include "_nav.html" %}
 <div class="row muted">
   Timezone {{ tz }} · pipelines: {{ pipelines|join(", ") }}
   <form method="post" action="/ui/reload"><button>Reload devices.yaml</button></form>
@@ -47,6 +29,8 @@
     <div>Last pull: {{ st.last_pull_at|local }}</div>
     <div>Last confirmed: {{ st.last_success_at|local }}</div>
     <div>Showing: {% if st.last_photo_id and st.last_photo_id in photo_by_id %}#{{ st.last_photo_id }} {{ photo_by_id[st.last_photo_id].filename }}{% else %}—{% endif %}</div>
+    {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
+      <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
     {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
   </div>
   <div class="muted">Tuning: {% for k, v in d.params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
@@ -104,10 +88,11 @@
     </form>
     <div class="muted">#{{ p.id }} {{ p.filename }} · {{ p.width }}×{{ p.height }}</div>
     {% if devices %}
-    <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/add'">
+    <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/'+event.submitter.value">
       <input type="hidden" name="photo_id" value="{{ p.id }}">
       <select name="dev">{% for d in devices %}<option value="{{ d.dev.id }}">{{ d.dev.name }}</option>{% endfor %}</select>
-      <button>Add to playlist</button>
+      <button value="add">Add to playlist</button>
+      <button value="queue" title="Serve on the next pull only">Show next</button>
     </form>
     {% endif %}
     {% set pp = json.loads(p.params_json) %}
