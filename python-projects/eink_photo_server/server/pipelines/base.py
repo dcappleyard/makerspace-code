@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 
+import numpy as np
 from PIL import Image, ImageCms, ImageEnhance, ImageOps
 
 
@@ -74,16 +75,43 @@ def resize_lanczos(img: Image.Image, w: int, h: int) -> Image.Image:
 
 # Tuning values that leave an image unchanged. Stored as a photo's per-photo
 # params to bypass device/pipeline tuning (e.g. for pre-tuned test cards).
-NEUTRAL_TUNING = {"saturation": 1.0, "contrast": 1.0, "brightness": 1.0, "gamma": 1.0}
+NEUTRAL_TUNING = {"saturation": 1.0, "contrast": 1.0, "brightness": 1.0, "gamma": 1.0,
+                  "lift": 0.0, "lift_threshold": 90.0}
+
+TUNING_KEYS = tuple(NEUTRAL_TUNING)
+
+# Rec. 709 luma weights (as used by eink-optimize).
+_LUMA = np.array([0.2126, 0.7152, 0.0722])
+
+
+def _lift_and_gamma(img: Image.Image, lift: float, threshold: float, gamma: float) -> Image.Image:
+    """Shadow lift and luma-only gamma, after fwmone/eink-optimize (MIT).
+
+    Lift: for pixels with luma Y < threshold, add lift * (1 - Y/threshold)^2 to
+    R, G and B -- a soft raise of the deepest shadows, which Spectra 6 crushes.
+    Gamma: map luma through 255 * (Y/255)^(1/gamma) and scale RGB by Y'/Y, so
+    hue and saturation are preserved (>1 lightens, as before).
+    """
+    a = np.asarray(img.convert("RGB"), dtype=np.float64)
+    if lift and threshold > 0:
+        y = a @ _LUMA
+        t = np.clip(1.0 - y / threshold, 0.0, 1.0)
+        a = np.clip(a + (lift * t * t)[..., None], 0, 255)
+    if gamma != 1.0:
+        y0 = a @ _LUMA
+        y1 = 255.0 * (y0 / 255.0) ** (1.0 / gamma)
+        scale = np.divide(y1, y0, out=np.ones_like(y0), where=y0 > 0)
+        a = np.clip(a * scale[..., None], 0, 255)
+    return Image.fromarray(np.rint(a).astype(np.uint8), "RGB")
 
 
 def apply_tuning(img: Image.Image, params: dict) -> Image.Image:
-    """Gamma -> brightness -> contrast -> saturation. Missing keys are neutral."""
-    gamma = params.get("gamma", 1.0)
-    if gamma != 1.0:
-        inv = 1.0 / gamma
-        lut = [round(255 * (i / 255) ** inv) for i in range(256)]
-        img = img.point(lut * len(img.getbands()))
+    """Lift -> luma gamma -> brightness -> contrast -> saturation.
+    Missing keys are neutral."""
+    lift = float(params.get("lift", 0.0))
+    gamma = float(params.get("gamma", 1.0))
+    if lift or gamma != 1.0:
+        img = _lift_and_gamma(img, lift, float(params.get("lift_threshold", 90.0)), gamma)
     for key, enhancer in (("brightness", ImageEnhance.Brightness),
                           ("contrast", ImageEnhance.Contrast),
                           ("saturation", ImageEnhance.Color)):

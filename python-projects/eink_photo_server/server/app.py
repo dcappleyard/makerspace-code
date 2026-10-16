@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from . import config as cfg
 from . import db, pipelines
 from .protocols import ROUTERS
+from .web.frame_routes import router as frame_router
 from .web.routes import router as web_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -31,3 +32,4 @@ def health():
 for r in ROUTERS.values():
     app.include_router(r)
 app.include_router(web_router)
+app.include_router(frame_router)

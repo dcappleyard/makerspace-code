@@ -29,11 +29,11 @@ def _palette_image() -> Image.Image:
 @register
 class Bloomin8Spectra6(Pipeline):
     name = "bloomin8_spectra6"
-    version = "1"
+    version = "2"   # 2: luma-only gamma + shadow lift
     file_suffix = "_L.jpg"
     color = True
     default_params = {"saturation": 1.2, "contrast": 1.1, "brightness": 1.0,
-                      "gamma": 1.0, "quality": 92}
+                      "gamma": 1.0, "lift": 0.0, "lift_threshold": 90.0, "quality": 92}
 
     def _tuned(self, img, device, params, focal):
         img = cover_crop(img, device.width, device.height, focal)

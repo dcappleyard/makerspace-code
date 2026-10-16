@@ -1,6 +1,7 @@
 """SQLite storage for photos, playlists, per-device runtime state, and pull history."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -38,8 +39,30 @@ CREATE TABLE IF NOT EXISTS device_state (
     last_pull_at    TEXT,
     last_success_at TEXT,
     hw_device_id    TEXT,
-    queued_photo_id INTEGER
+    queued_photo_id INTEGER,
+    wake_offset_s   INTEGER NOT NULL DEFAULT 0,
+    block_instance  TEXT,
+    block_photo_id  INTEGER,
+    next_target     TEXT,
+    next_cron_sent  TEXT
 );
+CREATE TABLE IF NOT EXISTS schedule_blocks (
+    id               INTEGER PRIMARY KEY,
+    device_id        TEXT NOT NULL,
+    start_time       TEXT NOT NULL,
+    kind             TEXT NOT NULL,
+    interval_minutes INTEGER,
+    photo_id         INTEGER REFERENCES photos(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    at        TEXT NOT NULL,
+    kind      TEXT NOT NULL,
+    summary   TEXT NOT NULL,
+    data_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS events_device ON events (device_id, id);
 CREATE TABLE IF NOT EXISTS pulls (
     pull_id     TEXT NOT NULL,
     device_id   TEXT NOT NULL,
@@ -58,7 +81,13 @@ CREATE TABLE IF NOT EXISTS pulls (
 MIGRATIONS = [
     ("device_state", "hw_device_id", "TEXT"),
     ("device_state", "queued_photo_id", "INTEGER"),
+    ("device_state", "wake_offset_s", "INTEGER NOT NULL DEFAULT 0"),
+    ("device_state", "block_instance", "TEXT"),
+    ("device_state", "block_photo_id", "INTEGER"),
+    ("device_state", "next_target", "TEXT"),
+    ("device_state", "next_cron_sent", "TEXT"),
 ]
+EVENTS_KEEP = 5000  # per device
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -100,6 +129,16 @@ def playlist(conn, device_id: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM playlist_items WHERE device_id = ? ORDER BY position, id", (device_id,)
     ).fetchall()
+
+
+def log_event(conn, device_id: str, kind: str, summary: str, at: str, **data) -> None:
+    """Append to a device's log (shown on its tab), keeping the newest EVENTS_KEEP."""
+    conn.execute("INSERT INTO events (device_id, at, kind, summary, data_json) VALUES (?,?,?,?,?)",
+                 (device_id, at, kind, summary, json.dumps(data, default=str)))
+    conn.execute(
+        "DELETE FROM events WHERE device_id = ? AND id <= "
+        "(SELECT id FROM events WHERE device_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)",
+        (device_id, device_id, EVENTS_KEEP))
 
 
 def photo(conn, photo_id: int) -> sqlite3.Row | None:

@@ -35,14 +35,36 @@ Modules in that folder are auto-discovered. Bump `version` whenever the output c
 ### Adding a protocol
 Add `server/protocols/<name>.py` with a FastAPI `router` and a `PROTOCOL` name, then list it in `server/protocols/__init__.py`. Use `schedule.choose()` / `schedule.next_wake()` and `prepare.get_prepared()` so the device shares the playlist logic. The planned ESP32 frame needs this: a "next image + sleep N s" endpoint and a pipeline that pre-dithers and packs 4 bpp.
 
-## Playlist behavior
-On each pull, the server answers based on the time *now*, never at an exact time:
-1. **Paused:** re-serve the last image, or 204 if there is none. Use this for vacation or to freeze a picture.
-2. **A time window is active** (e.g. 08:00–10:00): show that item. If several windows are active, rotate among them. A window counts as active from 30 min before its start, because frames wake early.
-3. **Otherwise:** show the next un-windowed item in playlist order, wrapping around.
-4. **Retry guard:** a pull within 5 min of an unconfirmed one gets the same image again.
+## Web UI
+- **Library** (`/`): upload photos, set crop focal points and per-photo tuning, add photos to a frame's playlist, or "Show next" on a frame.
+- **One tab per frame** (`/frame/<id>`): status, block schedule with a next-24-hours timeline, playlist, wake timing, and the frame's log.
+- **Test card:** see below.
 
-`next_cron_time` is set to now + `interval_minutes`. If that falls outside `wake_hours`, it moves to the next wake start. If a window opens before then, it moves to that window's start.
+## Schedule (daily blocks)
+Each frame has a daily timeline of blocks, edited on its tab. A block starts at a clock time and runs until the next block starts, wrapping past midnight.
+
+| Block | On a pull the frame gets | Next wake |
+|---|---|---|
+| **Sleep** | a chosen photo, or a random playlist photo (picked once per night) | when the block ends |
+| **Load image** | a chosen photo | when the block ends |
+| **Random image** | a random playlist photo (never the one just shown) | every N min |
+| **Play playlist** | the next playlist photo; the position carries over between blocks | every N min |
+
+- **Interval alignment:** intervals are counted from the block's start (07:00, 08:00, …).
+- **Playlist:** the frame's photo pool, which Random and Play playlist blocks draw from.
+- **No blocks yet:** the frame follows the `interval_minutes`/`wake_hours` defaults from `devices.yaml`. **Make these editable** turns those defaults into blocks.
+
+Precedence on each pull:
+1. A queued **Show next** photo (one shot).
+2. **Paused:** the last image is re-served.
+3. **Retry guard:** a pull within 5 min of an unconfirmed one gets the same image.
+4. The current block.
+
+## Wake timing and the log
+- **What the frame reports:** with every pull it reports `cron_time`, the wake time it was given. The log records that next to the actual pull time, so you can see the **drift**. Each pull also logs the battery, the block, the reason, and the next wake target and time sent.
+- **Early wakes:** a scheduled pull that arrives up to 60 min *before* its target counts as that target. The frame gets that slot's photo, and the next wake is computed from the slot, so an early wake doesn't cause an extra refresh.
+- **Wake offset:** the wake time sent is the target + the **wake offset**. The **Wake timing** card shows the median drift over the last 10 scheduled pulls, and **Apply measured** sets the offset to cancel it. If the frame wakes 3 min early, the offset becomes +3 min, so a 07:00 block's image appears at about 07:00.
+- **Log tools:** the log keeps the newest 5000 events per frame. It can be cleared, or downloaded as CSV, from the frame's tab.
 
 ## Battery overlay
 Set `battery_monitor` per device in `devices.yaml`:
@@ -53,6 +75,21 @@ Set `battery_monitor` per device in `devices.yaml`:
 The overlay is a ~20 px "NN%" in a small white box in the upper-right corner, as the frame is mounted. Below 10% it's red on colour panels, otherwise black.
 
 It shows the reading the frame sent with the same pull, or the last known reading if that pull didn't include one. The reading is part of the image's cache key, so a new value produces a new file and URL.
+
+## Tuning
+These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. The pipeline applies them in this order:
+
+1. **`lift` / `lift_threshold`** (defaults 0 / 90): soft shadow lift. Pixels darker than the threshold (luma 0–255) are raised by up to `lift`, most strongly at black. Spectra 6 tends to crush deep shadows.
+2. **`gamma`:** applied to luma only, so hue and saturation are kept. >1 lightens midtones, <1 darkens.
+3. **`brightness`, `contrast`, `saturation`:** 1.0 = unchanged.
+
+The lift formula and luma-gamma approach come from [fwmone/eink-optimize](https://github.com/fwmone/eink-optimize) (MIT). Its author's Bloomin8 settings are:
+- saturation 1.15
+- gamma 0.85 in its convention, which is about **1.18** here
+- lift 13 / threshold 90
+- no contrast boost
+
+A good first test card is A = your current settings, B = that recipe, C = halfway between.
 
 ## Test cards (tuning A/B/C on the real panel)
 Open the **Test card** tab. It renders one image at the frame's resolution, split into three columns (A/B/C), and each column is tuned with its own saturation, contrast, brightness and gamma.

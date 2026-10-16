@@ -24,7 +24,7 @@
     <tr><td></td>{% for k in tuning_keys %}<td class="muted">{{ k }}</td>{% endfor %}</tr>
     {% for seg, params in segments %}
     <tr><td><b>{{ seg }}</b></td>
-      {% for k in tuning_keys %}<td><input class="num" type="number" step="0.05" min="0" name="{{ seg }}_{{ k }}" value="{{ params[k] }}"></td>{% endfor %}
+      {% for k in tuning_keys %}<td><input class="num" type="number" step="any" min="0" name="{{ seg }}_{{ k }}" value="{{ params[k] }}"></td>{% endfor %}
     </tr>
     {% endfor %}
   </table>

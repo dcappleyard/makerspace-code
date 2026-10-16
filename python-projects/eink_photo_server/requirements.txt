@@ -4,3 +4,4 @@ Pillow
 jinja2
 python-multipart
 PyYAML
+numpy

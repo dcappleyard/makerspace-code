@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ dev.name }} · eInk Photo Server</title>
+{% include "_style.html" %}
+<style>
+  .now { background:#eef7ee; } .log td { font-size:13px; white-space:nowrap; } .log td.wrap { white-space:normal; }
+  .kind { font-size:12px; padding:1px 6px; border-radius:8px; background:var(--line); }
+  .kind.error { background:#f6d5c8; } .kind.pull { background:#d8e8f6; } .kind.signal { background:#dcefdc; }
+  td input[type=time] { width:7em; } select.photo { max-width:16em; }
+  .scroll { max-height:420px; overflow:auto; }
+</style>
+</head>
+<body>
+{% include "_nav.html" %}
+{% set st = state %}
+
+<div class="card">
+  <div class="row">
+    <h3>{{ dev.name }}</h3>
+    <span class="muted">{{ dev.protocol }} · {{ dev.pipeline }} · {{ dev.width }}×{{ dev.height }} · rot {{ dev.output_rotation }}° · battery overlay: {{ dev.battery_monitor }}</span>
+    {% if st.paused %}<span class="warn">PAUSED</span>{% endif %}
+    <form method="post" action="/ui/device/{{ dev.id }}/pause"><button>{{ "Resume" if st.paused else "Pause" }}</button></form>
+  </div>
+  <div class="row" style="align-items:flex-start; gap:16px">
+    {% if st.last_photo_id and st.last_photo_id in photo_by_id %}<a href="/ui/preview/{{ dev.id }}/{{ st.last_photo_id }}/sim" target="_blank"><img src="/ui/thumb/{{ st.last_photo_id }}" style="height:96px; border-radius:4px" alt="now showing"></a>{% endif %}
+    <div class="status" style="flex:1">
+      <div>Battery: <b>{{ st.battery if st.battery is not none else "—" }}{% if st.battery is not none %}%{% endif %}</b></div>
+      <div>Showing: {% if st.last_photo_id and st.last_photo_id in photo_by_id %}#{{ st.last_photo_id }} {{ photo_by_id[st.last_photo_id].filename }}{% else %}—{% endif %}</div>
+      <div>Last pull: {{ st.last_pull_at|local }}</div>
+      <div>Last confirmed: {{ st.last_success_at|local }}</div>
+      <div>Next wake (target): <b>{{ st.next_target|local }}</b></div>
+      <div class="muted">Sent to frame: {{ st.next_cron_sent|local }}{% if st.wake_offset_s %} (offset {{ st.wake_offset_s|duration }}){% endif %}</div>
+      <div>Now in: {{ kinds[current.block.kind] }} {{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}</div>
+      {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
+        <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
+      {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
+    </div>
+  </div>
+  <div class="muted">Tuning: {% for k, v in params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+</div>
+
+<h2>Schedule</h2>
+<div class="card">
+  <p class="muted">A daily timeline: each block starts at its time and runs until the next block starts.
+    <b>Sleep</b> and <b>Load image</b> show one photo until the block ends (Sleep with no photo picks a random one from the playlist).
+    <b>Random image</b> and <b>Play playlist</b> change photo every interval, counted from the block's start.</p>
+  {% if using_fallback %}
+  <p class="warn">No blocks yet — using the default from devices.yaml (shown below).
+    <form method="post" action="/frame/{{ dev.id }}/blocks/from-defaults"><button>Make these editable</button></form></p>
+  {% endif %}
+  <table>
+    <tr class="muted"><td>Start</td><td>Block</td><td>Every (min)</td><td>Photo</td><td></td></tr>
+    {% for b in blocks %}
+    {% set editable = not b.from_yaml %}
+    <tr class="{{ 'now' if b.key == current.block.key }}">
+      {% if editable %}<form id="b{{ b.key }}" method="post" action="/frame/{{ dev.id }}/blocks/{{ b.key }}/update"></form>{% endif %}
+      <td><input form="b{{ b.key }}" type="time" name="start" value="{{ b.start.strftime('%H:%M') }}" {{ "disabled" if not editable }}></td>
+      <td><select form="b{{ b.key }}" name="kind" {{ "disabled" if not editable }}>{% for k, label in kinds.items() %}<option value="{{ k }}" {{ "selected" if k == b.kind }}>{{ label }}</option>{% endfor %}</select></td>
+      <td><input form="b{{ b.key }}" class="num" type="number" min="5" name="interval" value="{{ b.interval or '' }}" placeholder="—" {{ "disabled" if not editable }}></td>
+      <td><select form="b{{ b.key }}" name="photo_id" class="photo" {{ "disabled" if not editable }}>
+            <option value="">{{ "random from playlist" if b.kind == "sleep" else "—" }}</option>
+            {% for p in photos %}<option value="{{ p.id }}" {{ "selected" if p.id == b.photo_id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}
+          </select></td>
+      <td class="row">{% if editable %}<button form="b{{ b.key }}">Save</button>
+        <form method="post" action="/frame/{{ dev.id }}/blocks/{{ b.key }}/delete"><button title="Delete block">✕</button></form>{% endif %}
+        {% if b.key == current.block.key %}<span class="muted">← now</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    <tr>
+      <form id="addblock" method="post" action="/frame/{{ dev.id }}/blocks/add"></form>
+      <td><input form="addblock" type="time" name="start" required></td>
+      <td><select form="addblock" name="kind">{% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select></td>
+      <td><input form="addblock" class="num" type="number" min="5" name="interval" placeholder="60"></td>
+      <td><select form="addblock" name="photo_id" class="photo"><option value="">random from playlist / —</option>
+            {% for p in photos %}<option value="{{ p.id }}">#{{ p.id }} {{ p.filename }}</option>{% endfor %}</select></td>
+      <td><button form="addblock">Add block</button></td>
+    </tr>
+  </table>
+
+  <details open><summary>Next 24 hours ({{ plan|length }} wakes)</summary>
+    <div class="scroll"><table>
+      <tr class="muted"><td>Wake</td><td>Block</td><td>Shows</td></tr>
+      {% for w in plan %}
+      <tr><td>{{ w.at.strftime("%a %H:%M") }}</td><td>{{ kinds[w.block.kind] }} {{ w.block.start.strftime("%H:%M") }}</td><td>{{ w.shows }}</td></tr>
+      {% endfor %}
+    </table></div>
+    <p class="muted">Times are targets; the frame is sent target + wake offset. Queued photos and pause aren't shown here.</p>
+  </details>
+</div>
+
+<h2>Playlist</h2>
+<div class="card">
+  <p class="muted">The photos Random and Play playlist blocks draw from. Add more from the <a href="/">Library</a>.</p>
+  <table>
+    {% for it in playlist %}{% set p = photo_by_id.get(it.photo_id) %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{% if p %}<img class="t" src="/ui/thumb/{{ p.id }}" alt="">{% endif %}</td>
+      <td>{{ p.filename if p else "?" }}{% if st.cursor == it.id %} <span class="muted">← last played</span>{% endif %}</td>
+      <td class="row">
+        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="up"><button>↑</button></form>
+        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="down"><button>↓</button></form>
+        <form method="post" action="/ui/item/{{ it.id }}/remove"><button title="Remove from playlist">✕</button></form>
+        {% if p %}<form method="post" action="/ui/device/{{ dev.id }}/queue"><input type="hidden" name="photo_id" value="{{ p.id }}"><button title="Serve on the next pull only">Show next</button></form>
+        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/prepared" target="_blank">file</a>
+        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/sim" target="_blank">sim</a>{% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td class="muted">Playlist is empty — add photos from the <a href="/">Library</a>.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<h2>Wake timing</h2>
+<div class="card">
+  <p class="muted">Drift = when the frame actually pulled minus the time it was told to wake.
+    The offset is added to every wake time sent, so a frame that wakes 3 min early needs +3 min.</p>
+  <div class="row">
+    <form method="post" action="/frame/{{ dev.id }}/offset" class="row">
+      Offset <input class="num" type="number" step="any" name="minutes" value="{{ (st.wake_offset_s or 0) / 60 }}"> min
+      <button>Set</button>
+    </form>
+    {% if drift %}
+    <span>Measured over {{ drift.n }} pull{{ "s" if drift.n != 1 }}: median <b>{{ drift.median|duration }}</b>
+      (range {{ drift.min|duration }} … {{ drift.max|duration }}){% if not drift.ours_only %} <span class="muted">— includes pulls not scheduled by this server</span>{% endif %}</span>
+    <form method="post" action="/frame/{{ dev.id }}/offset/apply"><button>Apply measured ({{ drift.suggested|duration }})</button></form>
+    {% else %}<span class="muted">No drift measured yet — needs pulls that report cron_time.</span>{% endif %}
+  </div>
+</div>
+
+<h2>Log</h2>
+<div class="card">
+  <div class="row">
+    <span class="muted">Latest {{ events|length }} events, newest first.</span>
+    <a href="/frame/{{ dev.id }}/log.csv">Download CSV</a>
+    <form method="post" action="/frame/{{ dev.id }}/log/clear" onsubmit="return confirm('Clear this frame\'s log?')"><button>Clear log</button></form>
+  </div>
+  <div class="scroll"><table class="log">
+    <tr class="muted"><td>Time</td><td>Event</td><td>Scheduled → drift</td><td>Battery</td><td>Next wake (target / sent)</td><td>Details</td></tr>
+    {% for e in events %}{% set d = e.data %}
+    <tr>
+      <td>{{ e.at|local }}</td>
+      <td><span class="kind {{ e.kind }}">{{ e.kind }}</span></td>
+      <td>{% if d.cron_time %}{{ d.cron_time|local }} → {{ d.drift_s|duration }}{% if not d.scheduled_by_server %} <span class="muted" title="cron_time wasn't one this server sent">*</span>{% endif %}{% endif %}</td>
+      <td>{{ d.battery if d.battery is not none else "" }}</td>
+      <td>{% if d.next_target %}{{ d.next_target|local }}{% if d.next_cron_sent != d.next_target %} / {{ d.next_cron_sent|local }}{% endif %}{% endif %}</td>
+      <td class="wrap">{{ e.summary }}</td>
+    </tr>
+    {% else %}<tr><td class="muted">No events yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+</body>
+</html>

@@ -7,77 +7,23 @@
 {% include "_style.html" %}
 </head>
 <body>
-{% set page = "home" %}{% include "_nav.html" %}
+{% include "_nav.html" %}
 <div class="row muted">
   Timezone {{ tz }} · pipelines: {{ pipelines|join(", ") }}
   <form method="post" action="/ui/reload"><button>Reload devices.yaml</button></form>
 </div>
+{% if not devices %}<p class="warn">No frames configured — add some to devices.yaml and reload.</p>{% endif %}
 
-<h2>Frames</h2>
-{% if not devices %}<p class="muted">No devices configured — add some to devices.yaml and reload.</p>{% endif %}
-{% for d in devices %}{% set dev, st = d.dev, d.state %}
-<div class="card">
-  <div class="row">
-    <h3>{{ dev.name }}</h3>
-    <span class="muted">{{ dev.protocol }} · {{ dev.pipeline }} · {{ dev.width }}×{{ dev.height }} · rot {{ dev.output_rotation }}° · every {{ dev.interval_minutes }} min · battery overlay: {{ dev.battery_monitor }}
-      {% if dev.wake_start %}· awake {{ dev.wake_start.strftime("%H:%M") }}–{{ dev.wake_end.strftime("%H:%M") }}{% endif %}</span>
-    {% if st.paused %}<span class="warn">PAUSED</span>{% endif %}
-    <form method="post" action="/ui/device/{{ dev.id }}/pause"><button>{{ "Resume" if st.paused else "Pause" }}</button></form>
-  </div>
-  <div class="status">
-    <div>Battery: <b>{{ st.battery if st.battery is not none else "—" }}{% if st.battery is not none %}%{% endif %}</b></div>
-    <div>Last pull: {{ st.last_pull_at|local }}</div>
-    <div>Last confirmed: {{ st.last_success_at|local }}</div>
-    <div>Showing: {% if st.last_photo_id and st.last_photo_id in photo_by_id %}#{{ st.last_photo_id }} {{ photo_by_id[st.last_photo_id].filename }}{% else %}—{% endif %}</div>
-    {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
-      <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
-    {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
-  </div>
-  <div class="muted">Tuning: {% for k, v in d.params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
-
-  <table>
-    {% for it in d.playlist %}{% set p = photo_by_id.get(it.photo_id) %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td>{% if p %}<img class="t" src="/ui/thumb/{{ p.id }}" alt="">{% endif %}</td>
-      <td>{{ p.filename if p else "?" }}{% if st.cursor == it.id %} <span class="muted">← last picked</span>{% endif %}</td>
-      <td>
-        <form method="post" action="/ui/item/{{ it.id }}/window" class="row">
-          <input type="time" name="start" value="{{ it.window_start or '' }}"> –
-          <input type="time" name="end" value="{{ it.window_end or '' }}">
-          <button title="Blank both to clear">Set window</button>
-        </form>
-      </td>
-      <td class="row">
-        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="up"><button>↑</button></form>
-        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="down"><button>↓</button></form>
-        <form method="post" action="/ui/item/{{ it.id }}/remove"><button>✕</button></form>
-        {% if p %}<a href="/ui/preview/{{ dev.id }}/{{ p.id }}/prepared" target="_blank">file</a>
-        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/sim" target="_blank">sim</a>{% endif %}
-      </td>
-    </tr>
-    {% else %}<tr><td class="muted">Playlist is empty — add photos from the library below.</td></tr>{% endfor %}
-  </table>
-
-  {% if st.last_photo_id and st.last_photo_id in photo_by_id %}
-  <details><summary>Current image previews</summary>
-    <div class="previews">
-      <img src="/ui/preview/{{ dev.id }}/{{ st.last_photo_id }}/sim" alt="simulated panel" title="Spectra 6 dither simulation">
-      <img src="/ui/preview/{{ dev.id }}/{{ st.last_photo_id }}/prepared" alt="file sent to frame" title="File sent to the frame (rotated as stored)">
-    </div>
-  </details>
-  {% endif %}
-</div>
-{% endfor %}
-
-<h2>Library</h2>
+<h2>Upload</h2>
 <div class="card">
   <form method="post" action="/ui/upload" enctype="multipart/form-data" class="row">
     <input type="file" name="files" accept="image/*" multiple required>
     <button>Upload</button>
   </form>
 </div>
-<p class="muted">Click a photo to set its crop focal point.</p>
+
+<h2>Library</h2>
+<p class="muted">Click a photo to set its crop focal point. Add photos to a frame's playlist here; schedule them on the frame's tab.</p>
 <div class="grid">
 {% for p in photos %}
   <div class="card">
@@ -87,12 +33,13 @@
       <input type="hidden" name="x"><input type="hidden" name="y">
     </form>
     <div class="muted">#{{ p.id }} {{ p.filename }} · {{ p.width }}×{{ p.height }}</div>
+    {% if p.id in in_playlists %}<div class="muted">In: {% for d in devices if d.id in in_playlists[p.id] %}<a href="/frame/{{ d.id }}">{{ d.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
     {% if devices %}
     <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/'+event.submitter.value">
       <input type="hidden" name="photo_id" value="{{ p.id }}">
-      <select name="dev">{% for d in devices %}<option value="{{ d.dev.id }}">{{ d.dev.name }}</option>{% endfor %}</select>
+      <select name="dev">{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
       <button value="add">Add to playlist</button>
-      <button value="queue" title="Serve on the next pull only">Show next</button>
+      <button value="queue" title="Serve on the frame's next pull only">Show next</button>
     </form>
     {% endif %}
     {% set pp = json.loads(p.params_json) %}

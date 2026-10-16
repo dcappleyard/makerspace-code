@@ -18,8 +18,10 @@ devices:
     token: CHANGE_ME_TOKEN
     # Path secret in image URLs (the frame may not send the header for the download).
     image_secret: CHANGE_ME_IMAGE_SECRET
+    # Default schedule, used until you add blocks on the frame's tab: play the
+    # playlist every interval_minutes during wake_hours, sleep outside them.
     interval_minutes: 120
-    wake_hours: ["07:00", "22:00"]  # local; outside these the frame sleeps till the next start
+    wake_hours: ["07:00", "22:00"]  # local
     # Battery % in the image's upper-right corner (as mounted), from the frame's
     # latest report: none (no battery monitor), always, or low (only below 10%).
     # Below 10% it's red on colour panels, otherwise black.
@@ -28,5 +30,7 @@ devices:
       saturation: 1.2           # 1.0 = unchanged
       contrast: 1.1
       brightness: 1.0
-      gamma: 1.0                # <1 darkens midtones, >1 lightens
+      gamma: 1.0                # luma only; <1 darkens midtones, >1 lightens
+      lift: 0                   # soft shadow lift (0 = off; ~10-15 to open up shadows)
+      lift_threshold: 90        # luma below which lift applies
       quality: 92               # JPEG quality sent to the frame

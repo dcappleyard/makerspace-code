@@ -14,11 +14,10 @@ import colorsys
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .pipelines.base import apply_tuning, cover_crop, resize_lanczos
+from .pipelines.base import NEUTRAL_TUNING, TUNING_KEYS, apply_tuning, cover_crop, resize_lanczos
 from .pipelines.bloomin8_spectra6 import SPECTRA6
 
 KINDS = ("color", "mono")
-TUNING_KEYS = ("saturation", "contrast", "brightness", "gamma")
 LABEL_FRAC = 0.09
 
 PASTELS = [(232, 190, 172), (198, 134, 66), (141, 85, 36),   # skin tones
@@ -146,8 +145,11 @@ def _mono_column(w, h, strip):
 
 
 def _label(params: dict, name: str) -> str:
-    return f"{name}  sat {params['saturation']:.2f}  con {params['contrast']:.2f}\n" \
-           f"    bri {params['brightness']:.2f}  gamma {params['gamma']:.2f}"
+    text = (f"{name}  sat {params['saturation']:.2f}  con {params['contrast']:.2f}\n"
+            f"    bri {params['brightness']:.2f}  gam {params['gamma']:.2f}")
+    if params["lift"]:
+        text += f"  lift {params['lift']:g}/{params['lift_threshold']:g}"
+    return text
 
 
 def render_card(kind: str, w: int, h: int, segments: list[dict],
@@ -164,7 +166,7 @@ def render_card(kind: str, w: int, h: int, segments: list[dict],
     font = _font(max(round(label_h * 0.32), 8))
     d = ImageDraw.Draw(card)
     for i, params in enumerate(segments):
-        params = {k: float(params.get(k, 1.0)) for k in TUNING_KEYS}
+        params = {k: float(params.get(k, NEUTRAL_TUNING[k])) for k in TUNING_KEYS}
         x0, x1 = round(i * w / n), round((i + 1) * w / n)
         col = apply_tuning(build(x1 - x0, h, strip), params)
         card.paste(col, (x0, 0))
