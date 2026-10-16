@@ -151,7 +151,8 @@ def _png(img) -> bytes:
 def testcard_page(request: Request):
     q = request.query_params
     if not cfg.config.devices:
-        raise HTTPException(400, "no devices configured")
+        return RedirectResponse("/?" + urlencode({"error": "Add a frame to devices.yaml (and Reload) before making test cards."}),
+                                status_code=303)
     dev, kind, photo, segments = _card_args(q)
     with db.tx() as conn:
         all_photos = conn.execute("SELECT id, filename FROM photos ORDER BY id DESC").fetchall()

@@ -11,7 +11,7 @@ from fastapi.responses import Response
 
 from .. import config as cfg
 from .. import db, pipelines, schedule
-from .common import back, device_or_404, require_admin, templates
+from .common import FormError, back, device_or_404, require_admin, templates
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -131,25 +131,25 @@ def _block_fields(conn, device_id, start: str, kind: str, interval: str, photo_i
     try:
         start_t = cfg.parse_hhmm(start)
     except (ValueError, AttributeError):
-        raise HTTPException(400, "start time must be HH:MM")
+        raise FormError("start time must be HH:MM")
     if kind not in schedule.KINDS:
-        raise HTTPException(400, "unknown block type")
+        raise FormError("unknown block type")
     iv = None
     if kind in schedule.INTERVAL_KINDS:
         try:
             iv = int(interval)
         except ValueError:
-            raise HTTPException(400, "interval (minutes) is required for this block type")
+            raise FormError("interval (minutes) is required for this block type")
         if iv < MIN_INTERVAL:
-            raise HTTPException(400, f"interval must be at least {MIN_INTERVAL} minutes")
+            raise FormError(f"interval must be at least {MIN_INTERVAL} minutes")
     pid = int(photo_id) if photo_id and kind in ("sleep", "image") else None
     if kind == "image" and not pid:
-        raise HTTPException(400, "pick the image to load")
+        raise FormError("pick the image to load")
     start_s = f"{start_t:%H:%M}"
     clash = conn.execute("SELECT id FROM schedule_blocks WHERE device_id = ? AND start_time = ? AND id IS NOT ?",
                          (device_id, start_s, exclude_id)).fetchone()
     if clash:
-        raise HTTPException(400, f"another block already starts at {start_s}")
+        raise FormError(f"another block already starts at {start_s}")
     return start_s, kind, iv, pid
 
 

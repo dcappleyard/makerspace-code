@@ -4,3 +4,4 @@
   {% for d in nav_devices() %}<a href="/frame/{{ d.id }}" class="{{ 'on' if page == d.id }}">{{ d.name }}</a>
   {% endfor %}<a href="/testcard" class="{{ 'on' if page == 'testcard' }}">Test card</a>
 </nav>
+{% if request.query_params.error %}<p class="banner-error">⚠ {{ request.query_params.error }}</p>{% endif %}

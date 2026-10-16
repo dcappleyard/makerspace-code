@@ -4,7 +4,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -51,11 +51,23 @@ templates.env.filters["duration"] = _duration
 templates.env.globals["nav_devices"] = lambda: list(cfg.config.devices.values())
 
 
-def back(request: Request, fallback: str = "/") -> RedirectResponse:
-    """Redirect to the page the form was posted from (path only, same site)."""
+def back(request: Request, fallback: str = "/", error: str | None = None) -> RedirectResponse:
+    """Redirect to the page the form was posted from (path only, same site),
+    optionally carrying an error message for the page's banner."""
     ref = urlsplit(request.headers.get("referer", ""))
-    target = ref.path + (f"?{ref.query}" if ref.query else "") if ref.path.startswith("/") else fallback
-    return RedirectResponse(target or fallback, status_code=303)
+    path = ref.path if ref.path.startswith("/") else fallback
+    query = [(k, v) for k, v in parse_qsl(ref.query) if k != "error"] if path == ref.path else []
+    if error:
+        query.append(("error", error))
+    return RedirectResponse(path + (f"?{urlencode(query)}" if query else ""), status_code=303)
+
+
+class FormError(Exception):
+    """A user-fixable form problem: shown as a banner on the page it came from."""
+
+
+async def form_error_handler(request: Request, exc: FormError):
+    return back(request, error=str(exc))
 
 
 def device_or_404(device_id: str):

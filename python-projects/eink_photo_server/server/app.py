@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from . import config as cfg
 from . import db, pipelines
 from .protocols import ROUTERS
+from .web.common import FormError, form_error_handler
 from .web.frame_routes import router as frame_router
 from .web.routes import router as web_router
 
@@ -22,6 +23,7 @@ for dev in cfg.config.devices.values():
 log.info("devices: %s; pipelines: %s", ", ".join(cfg.config.devices) or "none", ", ".join(pipelines.names()))
 
 app = FastAPI(title="eInk Photo Server", docs_url=None, redoc_url=None)
+app.add_exception_handler(FormError, form_error_handler)
 
 
 @app.get("/health")

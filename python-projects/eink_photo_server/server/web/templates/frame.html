@@ -11,6 +11,8 @@
   .kind.error { background:#f6d5c8; } .kind.pull { background:#d8e8f6; } .kind.signal { background:#dcefdc; }
   td input[type=time] { width:7em; } select.photo { max-width:16em; }
   .scroll { max-height:420px; overflow:auto; }
+  tr.dirty, form.dirty { background:#fff4d1; }
+  button.dirty { background:var(--warn); color:#fff; border-color:var(--warn); font-weight:600; }
 </style>
 </head>
 <body>
@@ -151,5 +153,25 @@
     {% else %}<tr><td class="muted">No events yet.</td></tr>{% endfor %}
   </table></div>
 </div>
+<script>
+// Unsaved-change tracking: highlight edited rows/forms and their Save button,
+// and warn before leaving the page with unsaved edits.
+(() => {
+  const dirty = new Set();
+  const buttonsFor = f => [...document.querySelectorAll(`button[form="${f.id}"]`), ...f.querySelectorAll("button")];
+  const mark = el => {
+    const f = el.form;
+    if (!f || f.method.toLowerCase() !== "post" || dirty.has(f)) return;
+    dirty.add(f);
+    (el.closest("tr") || f).classList.add("dirty");
+    buttonsFor(f).forEach(b => { if (!b.title.includes("Delete")) { b.classList.add("dirty"); b.textContent = b.textContent.replace(/ •$/, "") + " •"; } });
+  };
+  document.addEventListener("input", e => mark(e.target));
+  document.addEventListener("change", e => mark(e.target));
+  let submitting = false;
+  document.addEventListener("submit", () => { submitting = true; });
+  window.addEventListener("beforeunload", e => { if (dirty.size && !submitting) { e.preventDefault(); e.returnValue = ""; } });
+})();
+</script>
 </body>
 </html>
