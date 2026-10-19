@@ -63,6 +63,11 @@ CREATE TABLE IF NOT EXISTS events (
     data_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS events_device ON events (device_id, id);
+CREATE TABLE IF NOT EXISTS photo_tags (
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    tag      TEXT NOT NULL,
+    PRIMARY KEY (photo_id, tag)
+);
 CREATE TABLE IF NOT EXISTS pulls (
     pull_id     TEXT NOT NULL,
     device_id   TEXT NOT NULL,
@@ -89,7 +94,7 @@ MIGRATIONS = [
 ]
 EVENTS_KEEP = 5000  # per device
 
-_lock = threading.Lock()
+_lock = threading.RLock()  # re-entrant: a sidecar write may run inside a tx
 _conn: sqlite3.Connection | None = None
 
 

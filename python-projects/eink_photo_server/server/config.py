@@ -26,6 +26,14 @@ def parse_hhmm(s: str) -> time:
 
 
 BATTERY_MONITORS = ("none", "always", "low")
+CAPTION_LAYOUTS = ("none", "below_strip", "overlay_bottom")
+
+
+def _choice(d: dict, key: str, choices: tuple, default: str) -> str:
+    value = str(d.get(key, default)).lower()
+    if value not in choices:
+        raise ValueError(f"device {d.get('id')}: {key} must be one of {', '.join(choices)}")
+    return value
 
 
 def _battery_monitor(d: dict) -> str:
@@ -52,6 +60,10 @@ class Device:
     name: str = ""
     # Battery % overlay: "none" (no monitor), "always", or "low" (only below LOW_BATTERY).
     battery_monitor: str = "none"
+    # Server-rendered caption from the photo's sidecar: none / below_strip / overlay_bottom.
+    captions: str = "none"
+    caption_size: int | None = None    # px of the smaller text; default scales with the panel
+    options: dict = field(default_factory=dict)   # pipeline-specific (e.g. strip_height, fit)
 
     @classmethod
     def from_dict(cls, d: dict) -> Device:
@@ -71,7 +83,14 @@ class Device:
             wake_end=parse_hhmm(wake[1]) if wake[1] else None,
             tuning=dict(d.get("tuning") or {}),
             battery_monitor=_battery_monitor(d),
+            captions=_choice(d, "captions", CAPTION_LAYOUTS, "none"),
+            caption_size=int(d["caption_size"]) if d.get("caption_size") else None,
+            options=dict(d.get("options") or {}),
         )
+
+    @property
+    def caption_px(self) -> int:
+        return self.caption_size or max(14, round(self.height * 0.016))
 
 
 @dataclass

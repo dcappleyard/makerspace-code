@@ -8,13 +8,14 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .. import config as cfg
-from .. import db, photos, pipelines, prepare, testcards
+from .. import db, photos, pipelines, prepare, sidecar, testcards
 from ..pipelines.base import NEUTRAL_TUNING, TUNING_KEYS, load_oriented
 from .common import back, device_or_404, require_admin, templates
 
@@ -22,16 +23,29 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.get("/")
-def index(request: Request):
+def index(request: Request, tag: str = ""):
+    tag = " ".join(tag.split()).lower()
     with db.tx() as conn:
-        all_photos = conn.execute("SELECT * FROM photos ORDER BY id DESC").fetchall()
+        if tag:
+            all_photos = conn.execute(
+                "SELECT p.* FROM photos p JOIN photo_tags t ON t.photo_id = p.id WHERE t.tag = ? ORDER BY p.id DESC",
+                (tag,)).fetchall()
+        else:
+            all_photos = conn.execute("SELECT * FROM photos ORDER BY id DESC").fetchall()
+        tag_counts = conn.execute("SELECT tag, COUNT(*) AS n FROM photo_tags GROUP BY tag ORDER BY tag").fetchall()
         in_playlists = {}
         for r in conn.execute("SELECT DISTINCT device_id, photo_id FROM playlist_items"):
             in_playlists.setdefault(r["photo_id"], []).append(r["device_id"])
+    metas = {p["id"]: sidecar.read(p) for p in all_photos}
     return templates.TemplateResponse(request, "index.html", {
         "page": "home",
         "devices": list(cfg.config.devices.values()),
         "photos": all_photos,
+        "metas": metas,
+        "fields": sidecar.FIELDS,
+        "labels": sidecar.LABELS,
+        "tag": tag,
+        "tag_counts": tag_counts,
         "in_playlists": in_playlists,
         "tz": str(cfg.config.tz),
         "pipelines": pipelines.names(),
@@ -42,10 +56,49 @@ def index(request: Request):
 
 @router.post("/ui/upload")
 async def upload(request: Request, files: list[UploadFile] = File(...)):
+    """Images, optionally with same-named .xml sidecars (e.g. harbor.jpg +
+    harbor.xml from prepare_image.py) in the same batch."""
+    images, sidecars = [], {}
     for f in files:
-        if f.filename:
-            photos.ingest(f.filename, await f.read())
+        if not f.filename:
+            continue
+        name = Path(f.filename).name
+        if name.lower().endswith(".xml"):
+            sidecars[Path(name).stem.lower()] = await f.read()
+        else:
+            images.append((name, await f.read()))
+    for name, data in images:
+        photos.ingest(name, data, sidecars.pop(Path(name).stem.lower(), None))
+    if sidecars:
+        return back(request, error=f"No matching image for sidecar(s): {', '.join(sorted(sidecars))}.xml "
+                                   "-- upload each .xml together with its image.")
     return back(request)
+
+
+@router.post("/ui/photo/{photo_id}/meta")
+async def photo_meta(request: Request, photo_id: int):
+    form = await request.form()
+    with db.tx() as conn:
+        p = db.photo(conn, photo_id)
+    if not p:
+        raise HTTPException(404)
+    meta = sidecar.read(p)
+    for f in sidecar.FIELDS:
+        meta[f] = " ".join(str(form.get(f, "")).split())
+    meta["tags"] = sidecar.normalize_tags(str(form.get("tags", "")))
+    sidecar.write(p, meta)
+    return back(request)
+
+
+@router.get("/ui/photo/{photo_id}/sidecar.xml")
+def photo_sidecar(photo_id: int):
+    with db.tx() as conn:
+        p = db.photo(conn, photo_id)
+    if not p:
+        raise HTTPException(404)
+    sidecar.read(p)  # creates it if missing
+    return FileResponse(sidecar.path_for(photos.originals_dir(), p["sha"]), media_type="application/xml",
+                        filename=f"{Path(p['filename']).stem}.xml")
 
 
 @router.get("/ui/thumb/{photo_id}")
@@ -65,7 +118,14 @@ def preview(device_id: str, photo_id: int, kind: str):
     if not p:
         raise HTTPException(404)
     if kind == "prepared":
-        return FileResponse(prepare.get_prepared(dev, p), media_type=pipelines.get(dev.pipeline).content_type)
+        pipe = pipelines.get(dev.pipeline)
+        path = prepare.get_prepared(dev, p)
+        if not pipe.content_type.startswith("image/"):
+            img = pipe.decode(path.read_bytes(), dev)
+            if img is None:
+                return FileResponse(path, media_type=pipe.content_type, filename=path.name)
+            return Response(_png(img), media_type="image/png")
+        return FileResponse(path, media_type=pipe.content_type)
     path = prepare.get_preview(dev, p)
     if not path:
         raise HTTPException(404, "pipeline has no preview")
@@ -138,7 +198,8 @@ def _render(form):
     dev, kind, photo, segments = _card_args(form)
     photo_img = load_oriented(photos.original_path(photo)) if photo else None
     focal = (photo["focal_x"], photo["focal_y"]) if photo else (0.5, 0.5)
-    return dev, kind, testcards.render_card(kind, dev.width, dev.height, segments, photo_img, focal)
+    w, h = pipelines.get(dev.pipeline).content_size(dev)   # e.g. just the panorama strip
+    return dev, kind, testcards.render_card(kind, w, h, segments, photo_img, focal)
 
 
 def _png(img) -> bytes:

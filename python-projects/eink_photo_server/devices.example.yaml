@@ -26,6 +26,10 @@ devices:
     # latest report: none (no battery monitor), always, or low (only below 10%).
     # Below 10% it's red on colour panels, otherwise black.
     battery_monitor: always
+    # Caption from the photo's sidecar (title · location · film / artist ‡ date),
+    # rendered into the image: none, overlay_bottom (over the photo), or
+    # below_strip (strip frames). caption_size = px of the smaller text.
+    captions: none
     tuning:                     # overrides the pipeline's defaults; per-photo overrides win
       saturation: 1.2           # 1.0 = unchanged
       contrast: 1.1
@@ -34,3 +38,26 @@ devices:
       lift: 0                   # soft shadow lift (0 = off; ~10-15 to open up shadows)
       lift_threshold: 90        # luma below which lift applies
       quality: 92               # JPEG quality sent to the frame
+
+  # The DIY EE03 10.3" panorama frame (esp32-projects/xiao_s3_ee03_pull_frame).
+  # Its secrets.h holds the same token and this server's URL.
+  - id: office_panorama
+    name: Office panorama
+    protocol: esp32_pull
+    pipeline: ee03_gray16
+    width: 1872
+    height: 1404
+    output_rotation: 0
+    token: CHANGE_ME_TOKEN_2
+    image_secret: CHANGE_ME_IMAGE_SECRET_2
+    battery_monitor: none          # mains powered
+    captions: below_strip          # in the white band under the photo strip
+    options:
+      strip_height: 661            # 6:17 panorama strip; 778 = the prepare_image_778 look
+      fit: letterbox               # letterbox (full width) or cover (fill the strip)
+    interval_minutes: 120
+    wake_hours: ["07:00", "22:00"]
+    tuning:
+      contrast: 1.0
+      gamma: 1.0
+      lift: 0

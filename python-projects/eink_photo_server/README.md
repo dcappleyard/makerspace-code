@@ -76,6 +76,65 @@ The overlay is a ~20 px "NN%" in a small white box in the upper-right corner, as
 
 It shows the reading the frame sent with the same pull, or the last known reading if that pull didn't include one. The reading is part of the image's cache key, so a new value produces a new file and URL.
 
+## Photo sidecars and tags
+Each photo has a metadata sidecar, `originals/<sha>.xml`, in the flat `<meta>` format that `prepare_image.py` writes, plus a `tags` element:
+
+```xml
+<meta>
+  <artist>…</artist>
+  <date>YYYY-MM-DD</date>
+  <location>…</location>
+  <title>…</title>
+  <film>…</film>
+  <tags>beach, family</tags>
+</meta>
+```
+
+**Getting a sidecar at upload:**
+- Upload a same-named `.xml` alongside its image (`harbor.jpg` + `harbor.xml`) and its fields are imported.
+- Without one, the sidecar is created from the photo's EXIF: the date taken (DateTimeOriginal) and the artist.
+- Re-uploading the same image keeps its existing sidecar unless a new `.xml` comes with it.
+- On startup the server creates any missing sidecars and rebuilds the tag index.
+
+**Elements the server doesn't use** (e.g. `prepare_image.py`'s `text_color_*`) are kept as-is when the file is saved.
+
+**In the Library:**
+- Each photo shows `Title · Location · Film` and `Artist ‡ Date`, plus its tags.
+- **Edit info** changes any field.
+- **↓ xml** downloads the sidecar.
+- The tag bar filters the Library by tag (`/?tag=…`).
+
+## Captions
+A frame can have a photo's caption rendered into the image on the server. It uses the same layout as the original EE03 firmware: a left run `Title · Location · Film` and a larger right run `Artist ‡ Date`.
+
+Set it per device in `devices.yaml`:
+- **`captions: below_strip`:** in the white band under a panorama strip. Black text.
+- **`captions: overlay_bottom`:** over the bottom of the photo, in black or white chosen for contrast, with an outline.
+- **`captions: none`:** the default.
+- **`caption_size`:** sets the smaller text's px. The default scales with the panel.
+
+**Font:** the Docker image installs DejaVu Sans for wide character coverage. Outside Docker the server uses a system font if it finds one, else Pillow's built-in font, which only covers basic Latin. The `·` and `‡` separators are drawn as shapes, so they don't depend on the font.
+
+**Caching:** caption text is part of the image's cache key, so editing a title gives the frame a fresh image on its next pull.
+
+## EE03 panorama frame (`esp32_pull` + `ee03_gray16`)
+This serves the DIY 10.3" EE03 frame; its firmware is in `esp32-projects/xiao_s3_ee03_pull_frame/`.
+
+**The `ee03_gray16` pipeline** does what `python-projects/grayscale_image_conversion/prepare_image.py` does:
+1. Places the photo in a panorama strip on a white 1872×1404 canvas. `options.strip_height` (661 or 778) and `options.fit` (`letterbox` or `cover`) control the strip.
+2. Tunes it in gray and draws the caption.
+3. Dithers to 16 grays (Floyd–Steinberg).
+4. Nibble-packs it into the exact 1,314,144-byte `.bin` the panel takes.
+
+The UI previews decode the `.bin` back to a PNG.
+
+**The `esp32_pull` protocol:**
+- **`GET /esp32/v1/pull`** (`X-Access-Token` header): returns JSON with a status of `show`, `keep`, `none` or `error`. A `show` includes `image_url`, `image_bytes`, `sha256` and `name`. Every response includes `next_check_s` and `next_check_at`.
+- **`keep`:** the frame already shows the right image (it reports `current=<name>`), so it skips both the download and the panel refresh.
+- **`GET /esp32/v1/signal`:** confirms the display after the panel refresh.
+
+The schedule blocks, wake offset and log are the same as for the Bloomin8.
+
 ## Tuning
 These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. The pipeline applies them in this order:
 

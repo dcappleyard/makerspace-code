@@ -6,8 +6,8 @@ import logging
 from fastapi import FastAPI
 
 from . import config as cfg
-from . import db, pipelines
-from .protocols import ROUTERS
+from . import db, pipelines, sidecar
+from .protocols import ROUTERS, SHARED_ROUTER
 from .web.common import FormError, form_error_handler
 from .web.frame_routes import router as frame_router
 from .web.routes import router as web_router
@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("eink_photo_server")
 
 db.init()
+sidecar.backfill()  # create missing sidecars (from EXIF) and rebuild the tag index
 for dev in cfg.config.devices.values():
     pipelines.get(dev.pipeline)  # fail fast on a typo'd pipeline name
     if dev.protocol not in ROUTERS:
@@ -31,6 +32,7 @@ def health():
     return {"status": "ok", "devices": len(cfg.config.devices)}
 
 
+app.include_router(SHARED_ROUTER)   # /image/{secret}/{name}
 for r in ROUTERS.values():
     app.include_router(r)
 app.include_router(web_router)

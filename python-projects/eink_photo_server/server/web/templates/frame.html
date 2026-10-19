@@ -35,7 +35,7 @@
       <div>Last confirmed: {{ st.last_success_at|local }}</div>
       <div>Next wake (target): <b>{{ st.next_target|local }}</b></div>
       <div class="muted">Sent to frame: {{ st.next_cron_sent|local }}{% if st.wake_offset_s %} (offset {{ st.wake_offset_s|duration }}){% endif %}</div>
-      <div>Now in: {{ kinds[current.block.kind] }} {{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}</div>
+      <div>Now in: {{ kinds[current.block.kind] }} {% if (current.end - current.start).days >= 1 %}(all day){% else %}{{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}{% endif %}</div>
       {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
         <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
       {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
