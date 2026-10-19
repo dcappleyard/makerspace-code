@@ -30,7 +30,7 @@ def _palette_image() -> Image.Image:
 @register
 class Bloomin8Spectra6(Pipeline):
     name = "bloomin8_spectra6"
-    version = "2"   # 2: luma-only gamma + shadow lift
+    version = "3"   # 2: luma-only gamma + shadow lift; 3: per-run caption contrast
     file_suffix = "_L.jpg"
     color = True
     default_params = {"saturation": 1.2, "contrast": 1.1, "brightness": 1.0,

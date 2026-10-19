@@ -51,7 +51,7 @@ devices:
     token: CHANGE_ME_TOKEN_2
     image_secret: CHANGE_ME_IMAGE_SECRET_2
     battery_monitor: none          # mains powered
-    captions: below_strip          # in the white band under the photo strip
+    captions: below_strip          # under the strip; overlay_bottom = on the photo's bottom edge
     options:
       strip_height: 661            # 6:17 panorama strip; 778 = the prepare_image_778 look
       fit: letterbox               # letterbox (full width) or cover (fill the strip)

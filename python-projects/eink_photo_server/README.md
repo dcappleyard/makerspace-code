@@ -109,7 +109,9 @@ A frame can have a photo's caption rendered into the image on the server. It use
 
 Set it per device in `devices.yaml`:
 - **`captions: below_strip`:** in the white band under a panorama strip. Black text.
-- **`captions: overlay_bottom`:** over the bottom of the photo, in black or white chosen for contrast, with an outline.
+- **`captions: overlay_bottom`:** over the bottom of the photo, inside the strip on strip frames. Each half gets its own color for contrast with what's under it:
+  - **Gray panels:** `prepare_image.py`'s gray levels, no outline. This is how the old EE03 firmware's captions looked on a 778 strip.
+  - **Color panels:** black or white, with an outline.
 - **`captions: none`:** the default.
 - **`caption_size`:** sets the smaller text's px. The default scales with the panel.
 

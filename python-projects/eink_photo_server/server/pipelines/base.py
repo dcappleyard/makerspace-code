@@ -243,11 +243,29 @@ def _draw_run(draw, x, baseline, parts, font, size, fill, sep, stroke=None):
         x += draw.textlength(part, font=font)
 
 
+def _contrast_ink(img: Image.Image, box) -> tuple:
+    """(fill, stroke) for text over the pixels in box. Gray panels follow
+    prepare_image.py's gray_color_for_mean() (the per-corner text_color_* the old
+    EE03 firmware drew with, no outline); colour panels get black or white with
+    an outline in the other, so it survives busy photos."""
+    region = img.convert("L").crop(box)
+    mean = float(np.asarray(region, dtype=np.float32).mean()) if region.size[0] and region.size[1] else 255.0
+    if img.mode == "L":
+        level = mean * 15 / 255
+        gray = 12 if level < 4.5 else 15 if level < 7.5 else 0 if level < 10.5 else 3
+        return gray * 17, None
+    return ((0, 0, 0), (255, 255, 255)) if mean >= 128 else ((255, 255, 255), (0, 0, 0))
+
+
 def draw_caption(img: Image.Image, cap: dict, layout: str, size: int,
                  strip: tuple[int, int] | None = None) -> Image.Image:
     """Render the caption onto img (RGB or L). `strip` = (top, bottom) rows of a
-    photo strip; below_strip puts the text in the band under it (falls back to
-    overlay_bottom when there's no strip)."""
+    photo strip, if the pipeline uses one:
+      below_strip     in the white band under the strip, black
+      overlay_bottom  over the bottom of the photo (the strip's bottom edge when
+                      there is one), each run in a colour contrasting with what's
+                      under it -- the old EE03 firmware's look on a 778 strip
+    below_strip with no strip falls back to overlay_bottom."""
     from PIL import ImageDraw
     left, right = caption_runs(cap)
     if layout == "none" or not (left or right):
@@ -265,21 +283,24 @@ def draw_caption(img: Image.Image, cap: dict, layout: str, size: int,
             left = left[:-1]
         else:
             left = [left[0][:-4] + "..."] if len(left[0]) > 4 else []
-    black, white = (0 if img.mode == "L" else (0, 0, 0)), (255 if img.mode == "L" else (255, 255, 255))
+    w_l = _run_width(d, left, f_l, size * 1.1)
+    x_l, x_r = margin, img.width - margin - w_r
+
     if layout == "below_strip" and strip:
         baseline = strip[1] + round(size * 0.6) + round(size_r * 0.8)
-        fill, stroke = black, None
+        black = 0 if img.mode == "L" else (0, 0, 0)
+        ink_l = ink_r = (black, None)
     else:
-        baseline = img.height - margin
-        # Pick black or white text for contrast with what's under it, outlined
-        # in the other so it survives busy photos.
-        box = img.convert("L").crop((0, max(0, baseline - size_r), img.width, min(img.height, baseline + size_r // 3)))
-        light = np.asarray(box, dtype=np.float32).mean() >= 128 if box.size[1] > 0 else True
-        fill, stroke = (black, white) if light else (white, black)
+        # Leave room under the baseline for descenders, inside the photo.
+        bottom = strip[1] if strip else img.height
+        baseline = bottom - max(round(size_r * 0.35), margin // 2)
+        top = baseline - size_r
+        ink_l = _contrast_ink(img, (x_l, top, x_l + max(1, int(w_l)), bottom))
+        ink_r = _contrast_ink(img, (int(x_r), top, int(x_r + w_r) + 1, bottom))
     if left:
-        _draw_run(d, margin, baseline, left, f_l, size, fill, "dot", stroke)
+        _draw_run(d, x_l, baseline, left, f_l, size, ink_l[0], "dot", ink_l[1])
     if right:
-        _draw_run(d, img.width - margin - w_r, baseline, right, f_r, size_r, fill, "dagger", stroke)
+        _draw_run(d, x_r, baseline, right, f_r, size_r, ink_r[0], "dagger", ink_r[1])
     return img
 
 

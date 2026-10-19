@@ -51,7 +51,7 @@ def unpack_nibbles(data: bytes, w: int, h: int) -> Image.Image:
 @register
 class EE03Gray16(Pipeline):
     name = "ee03_gray16"
-    version = "1"
+    version = "2"   # 2: overlay_bottom captions sit inside the strip
     file_suffix = "_G.bin"
     content_type = "application/octet-stream"
     color = False
