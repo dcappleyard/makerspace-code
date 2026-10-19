@@ -147,11 +147,15 @@ Wake the frame so it's reachable, then:
 ```bash
 python -m server.tools.configure_frame living_room_73 <frame-ip> --server http://<pi-ip>:8080
 ```
-This PUTs `/upstream/pull_settings` with the device token and a first wake 2 minutes out. Use `--dry-run` to only print the request.
+The tool does two things:
+1. PUTs `/upstream/pull_settings` with the device token and a first wake 2 minutes out.
+2. Switches the frame to **single-image mode** (`POST /show {"play_type":0}`), keeping whatever it currently shows. See "Local playback overrides pulls" below for why. Skip this with `--keep-local-playback`.
+
+Use `--dry-run` to only print the PUT.
 
 - **On the Pi:** run it inside the container with `docker compose exec eink-photo-server python -m server.tools.configure_frame …`. That container already has `/data`.
 - **Locally:** prefix the command with `DATA_DIR=./data`.
-- **If the server can't reach the frames' VLAN:** this happens when the firewall only allows IoT → server. Add `--print-curl` and run the printed command from a machine that can reach the frame, e.g. the one running the Bloomin8 app.
+- **If the server can't reach the frames' VLAN:** this happens when the firewall only allows IoT → server. Add `--print-curl` and run the two printed commands from a machine that can reach the frame, e.g. the one running the Bloomin8 app. The second one needs `python3`.
 
 ## Data (`DATA_DIR`, `/data` in Docker; git-ignored)
 - `devices.yaml`: device registry. It holds the tokens, so it stays out of git.
@@ -163,4 +167,13 @@ This PUTs `/upstream/pull_settings` with the device token and a first wake 2 min
 - **Protocol:** the response shape follows Lukafin/bloomin8-pull-server and fwmone/bloomin8_pull. HTTP is always 200, and the real `status` (200 SHOW / 204 / 4xx ERROR) is in the JSON body. Times are ISO-8601 UTC with a `Z` suffix.
 - **Device lookup:** devices are identified by **token**. The frame's own `device_id` is recorded and shown in the UI, but it doesn't have to be configured.
 - **`output_rotation`:** defaults to 90 in the example. Lukafin stores landscape images rotated 90° CW, so the file is portrait-shaped but still named `_L.jpg`. Check with a photo that has an obvious "up". If it's wrong, change the value and reload; the new cache key means the next pull serves a fresh image.
+- **Local playback overrides pulls.** Pull mode doesn't stop the frame's own slideshow.
+  - **Symptom:** old photos from the frame's own gallery replace server images every few minutes, and the battery drains faster.
+  - **Cause:** the frame is still in gallery (`play_type` 1) or playlist (`play_type` 2) mode, and its own timer (`play_duration`, e.g. 300 s) keeps advancing the local slideshow.
+  - **Check:** `curl http://<frame>/deviceInfo` and look at `play_type`, `playlist`, `gallery` and `next_time`.
+  - **Fix:** `configure_frame` does this, or by hand: `POST /show {"play_type":0,"image":"<deviceInfo image>"}`. Afterwards `next_time` falls back to `sleep_duration`, which is about 3 days.
+  - **Where pulled images go:** the frame stores them in a local `upstream` gallery; leave that gallery alone.
+  - **`pre_image`** in `/upstream/pull_settings` is read-only (the last displayed image) and can't be cleared.
+  - **API references:** [Schedule Pull API](https://github.com/ARPOBOT-BLOOMIN8/eink_canvas_home_assistant_component/blob/main/docs/Schedule_Pull_API.md) and [local API (OpenAPI)](https://github.com/ARPOBOT-BLOOMIN8/eink_canvas_home_assistant_component/blob/main/openapi.yaml).
+- **Native panel orientation:** the 7.3" reports `width: 480, height: 800` in `/deviceInfo`, i.e. it's natively portrait. That's why a landscape-mounted frame needs `output_rotation: 90`.
 - **File size:** the frame's maximum file size and support for progressive JPEGs are unknown. We send baseline JPEGs at q92, and the log records each image's byte size.
