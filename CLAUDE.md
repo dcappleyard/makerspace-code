@@ -19,6 +19,31 @@ Each segment's CLAUDE.md is the authoritative source for that segment's conventi
 - Root `.gitignore` covers OS cruft (`.DS_Store`), PlatformIO build output (`.pio/`), Python caches/venvs, and pixlet build artifacts (`*.zip`). Segment-specific `.gitignore` files (e.g. under `esp32-projects/`) can still exist for tool-specific patterns.
 - `python-projects/usgs_monitoring/` and `tidbyt-starlark/`'s `usgs_tracker`, `yahara_candle`, and `yahara_plot` apps all pull from the same USGS water-monitoring sites on the Yahara river (Madison, WI). The Python scripts are ad hoc analysis/CLI tools; the Starlark apps are the Tidbyt display layer. A change to site IDs, parameter codes, or data-shape assumptions in one likely applies to the others.
 
+## Splitting work and delegating to cheaper agents
+
+For any non-trivial task, break it into subtasks before starting. Hand the self-contained ones to subagents running a lower-cost model. This counts as standing permission to spawn agents.
+
+- **Delegate:**
+  - **Broad codebase searches and reading.** Use the `Explore` agent, and use `model: "haiku"` when the job is only locating files or symbols.
+  - **Mechanical work.** Bulk renames, repetitive edits that follow a clear pattern, boilerplate, and formatting or doc updates. Use `model: "haiku"` or `"sonnet"`.
+  - **Independent research.** Datasheets, library APIs, pin maps, version checks. Use `model: "sonnet"`.
+  - **Long build/test runs and log triage** (e.g. `pio run`). Use a cheap model that reports back only the errors.
+- **Keep in the main session:**
+  - design decisions and architecture
+  - anything that depends on the conversation's context
+  - tricky or subtle code
+  - the final review of what subagents produced
+- **Don't delegate tiny things.** If it's a single file read, a one-line edit, or a few tool calls, do it directly; spawning an agent costs more than it saves.
+- **Run independent subtasks in parallel**, in one message.
+- **Never let two agents edit the same files.**
+- **Give each agent a complete brief.** Agents start cold, so include:
+  - the files or area to work in, and which segment's CLAUDE.md applies
+  - the constraints
+  - what "done" looks like
+  - what to report back, kept short
+- **Verify delegated output** (read the diff, rebuild) before reporting it as done.
+- **Commits stay with the user.** The no-commit rule below applies to subagents too.
+
 ## Commits
 
 The user makes all commits themselves — don't `git commit` (or stage/push) unprompted. When asked for a commit message, generate one to hand back for the user to use themselves; don't run `git commit` with it unless explicitly told to.
