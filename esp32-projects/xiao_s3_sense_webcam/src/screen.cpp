@@ -47,7 +47,9 @@ uint32_t stateSinceMs = 0;
 
 void IRAM_ATTR onTouchInt() { touchIrq = true; }
 
-// True once per tap: on the first report after TOUCH_REARM_MS of quiet.
+// True once per tap: on the first report after TOUCH_REARM_MS of quiet, and
+// never within TOUCH_LOCKOUT_MS of the last screen change (the touch that
+// caused it may still report as the finger lifts).
 bool takeTap()
 {
     bool active = touchIrq || digitalRead(TOUCH_INT_PIN) == LOW;
@@ -57,6 +59,8 @@ bool takeTap()
     uint32_t now = millis();
     bool fresh = (uint32_t)(now - lastTouchReportMs) > TOUCH_REARM_MS;
     lastTouchReportMs = now;
+    if ((uint32_t)(now - stateSinceMs) < TOUCH_LOCKOUT_MS)
+        return false;
     return fresh;
 }
 

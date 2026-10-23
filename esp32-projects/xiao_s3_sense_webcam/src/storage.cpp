@@ -1,6 +1,7 @@
 #include "storage.h"
 #include "screen.h"
 
+#include <Preferences.h>
 #include <SD.h>
 #include <SPI.h>
 #include <time.h>
@@ -11,6 +12,7 @@ const char *PHOTO_DIR = "/photos";
 namespace
 {
 
+constexpr const char *NVS_NAMESPACE = "storage";
 bool mounted = false;
 
 struct RamPhoto
@@ -134,16 +136,59 @@ bool mountSd(size_t *moved)
         SD.end();
         mounted = false;
     }
-    // The card shares GPIO 7/8/9 with the round display, so it rides on the
-    // display's SPI instance (already begun by setupScreen()) rather than the
-    // global SPI -- see screenSpi() in screen.h.
-    if (!SD.begin(SD_CS, screenSpi(), SD_FREQUENCY_HZ) || SD.cardType() == CARD_NONE)
+    // Two possible slots share GPIO 7/8/9 with the round display: the Sense
+    // board's (CS 21) and the display's own (CS 3 / D2 -- the one Seeed's wiki
+    // points at when the round display is fitted). Both ride on the display's
+    // SPI instance (already begun by setupScreen()) rather than the global SPI
+    // -- see screenSpi() in screen.h. Each is tried at 20 MHz, then slower;
+    // the slot that worked last goes first (remembered in NVS), since an empty
+    // slot costs ~600 ms per attempt to give up on.
+    struct Slot
+    {
+        int cs;
+        int otherCs;
+        const char *where;
+    };
+    Slot slots[] = {{SD_CS, ROUND_SD_CS, "Sense board"}, {ROUND_SD_CS, SD_CS, "round display"}};
+    const uint32_t freqs[] = {SD_FREQUENCY_HZ, SD_SLOW_FREQUENCY_HZ};
+    Preferences prefs;
+    prefs.begin(NVS_NAMESPACE, true);
+    int preferred = prefs.getInt("sdCs", ROUND_SD_CS);
+    prefs.end();
+    if (slots[0].cs != preferred)
+        std::swap(slots[0], slots[1]);
+
+    for (const Slot &slot : slots)
+    {
+        for (uint32_t hz : freqs)
+        {
+            pinMode(slot.otherCs, OUTPUT);
+            digitalWrite(slot.otherCs, HIGH); // only one card selected at a time
+            uint32_t t0 = millis();
+            bool ok = SD.begin(slot.cs, screenSpi(), hz) && SD.cardType() != CARD_NONE;
+            Serial.printf("SD: %s slot (CS %d) at %lu MHz: %s (%lu ms)\n", slot.where, slot.cs,
+                          (unsigned long)(hz / 1000000), ok ? "OK" : "no card", (unsigned long)(millis() - t0));
+            if (ok)
+            {
+                mounted = true;
+                if (slot.cs != preferred)
+                {
+                    prefs.begin(NVS_NAMESPACE, false);
+                    prefs.putInt("sdCs", slot.cs);
+                    prefs.end();
+                }
+                break;
+            }
+            SD.end();
+        }
+        if (mounted)
+            break;
+    }
+    if (!mounted)
     {
         Serial.println("No SD card -- snapshots will be kept in RAM");
-        SD.end();
         return false;
     }
-    mounted = true;
     if (!SD.exists(PHOTO_DIR) && !SD.mkdir(PHOTO_DIR))
         Serial.printf("Could not create %s\n", PHOTO_DIR);
     size_t n = flushRamToSd();

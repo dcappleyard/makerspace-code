@@ -13,8 +13,9 @@
 // none of it is locked. Keep the stream task out of here.
 // -----------------------------------------------------------------------------
 
-// (Re)mounts the card: unmounts first if it was mounted, so this doubles as
-// the "card swapped / inserted" check. On success, moves any RAM photos onto it
+// (Re)mounts the card, in whichever slot it's in (Sense board or round
+// display): unmounts first if it was mounted, so this doubles as the "card
+// swapped / inserted" check. Logs every attempt. On success, moves any RAM photos onto it
 // and returns how many in `moved`.
 bool mountSd(size_t *moved = nullptr);
 bool sdIsMounted();

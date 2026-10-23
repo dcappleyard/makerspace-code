@@ -1,5 +1,6 @@
 #include "web.h"
 #include "app.h"
+#include "battery.h"
 #include "camera.h"
 #include "index_html.h"
 #include "storage.h"
@@ -133,6 +134,9 @@ esp_err_t handleStatus(httpd_req_t *req)
     j += ",\"ram_photos_max\":" + String(RAM_PHOTOS_MAX);
     j += ",\"psram_free\":" + String(ESP.getFreePsram()) + ",\"heap_free\":" + String(ESP.getFreeHeap());
     j += ",\"stream_clients\":" + String(streamClients.load());
+    BatteryReading b = batteryNow();
+    j += ",\"battery\":{\"valid\":" + String(tf(b.valid)) + ",\"battery_mv\":" + String(b.batteryMv) +
+         ",\"percent\":" + String(b.percent) + ",\"usb_host\":" + tf(b.usbHost) + "}";
     j += ",\"stream_port\":" + String(STREAM_PORT);
 #ifdef WEB_AUTH_USER
     j += ",\"stream_token\":" + jsonStr(streamToken);
@@ -244,6 +248,99 @@ esp_err_t handleSdMount(httpd_req_t *req)
     return sendJson(req, String("{\"sd\":") + tf(ok) + ",\"moved\":" + String(moved) + "}");
 }
 
+// --- Battery ------------------------------------------------------------------
+
+esp_err_t handleBattery(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    return sendJson(req, batteryJson());
+}
+
+esp_err_t handleBatteryStart(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    String v;
+    long interval = getQuery(req, "interval", v) ? v.toInt() : 30;
+    if (interval < 5 || interval > 3600)
+        return sendError(req, "400 Bad Request", "interval must be 5-3600 s");
+    String name;
+    if (!startBatteryLog((uint32_t)interval, name))
+        return sendError(req, "500 Internal Server Error", "could not start the log (flash filesystem?)");
+    return sendJson(req, batteryJson());
+}
+
+esp_err_t handleBatteryStop(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    stopBatteryLog();
+    return sendJson(req, batteryJson());
+}
+
+esp_err_t handleBatteryRun(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    String name;
+    if (!getQuery(req, "name", name) || !validRunName(name))
+    {
+        httpd_resp_send_404(req);
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "text/csv");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    bool ok = readRun(name, [req](const uint8_t *data, size_t len) {
+        return httpd_resp_send_chunk(req, (const char *)data, len) == ESP_OK;
+    });
+    if (ok)
+        httpd_resp_send_chunk(req, nullptr, 0);
+    return ok ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t handleBatteryRunDelete(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    String name;
+    if (!getQuery(req, "name", name) || !deleteRun(name))
+        return sendError(req, "400 Bad Request", "no such run, or it's still logging");
+    return sendJson(req, batteryJson());
+}
+
+// ?mv=2100,2060,...,1850 (11 A0 values for 100%..0%) &src=run-002.csv
+esp_err_t handleBatteryCal(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    String list, src;
+    if (!getQuery(req, "mv", list))
+        return sendError(req, "400 Bad Request", "need mv");
+    getQuery(req, "src", src);
+    int mv[11];
+    int n = 0, start = 0;
+    while (n < 11 && start <= (int)list.length())
+    {
+        int comma = list.indexOf(',', start);
+        if (comma < 0)
+            comma = list.length();
+        mv[n++] = list.substring(start, comma).toInt();
+        start = comma + 1;
+    }
+    if (n != 11 || start <= (int)list.length() || !setCalibration(mv, src))
+        return sendError(req, "400 Bad Request", "need 11 non-increasing mV values");
+    return sendJson(req, batteryJson());
+}
+
+esp_err_t handleBatteryCalReset(httpd_req_t *req)
+{
+    if (!authorized(req))
+        return ESP_OK;
+    resetCalibration();
+    return sendJson(req, batteryJson());
+}
+
 // --- Stream -------------------------------------------------------------------
 
 constexpr const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=xiaocamframe";
@@ -300,13 +397,15 @@ void route(httpd_handle_t server, const char *uri, httpd_method_t method, esp_er
 
 } // namespace
 
+int streamClientCount() { return streamClients.load(); }
+
 void startWebServers()
 {
     initAuth();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = HTTP_PORT;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 20;
     config.stack_size = 8192; // String-built JSON + SD file I/O
     config.lru_purge_enable = true;
     if (httpd_start(&apiServer, &config) == ESP_OK)
@@ -322,6 +421,13 @@ void startWebServers()
         route(apiServer, "/api/photos/delete", HTTP_POST, handleDelete);
         route(apiServer, "/api/sd/mount", HTTP_POST, handleSdMount);
         route(apiServer, "/photo", HTTP_GET, handlePhoto);
+        route(apiServer, "/api/battery", HTTP_GET, handleBattery);
+        route(apiServer, "/api/battery/log/start", HTTP_POST, handleBatteryStart);
+        route(apiServer, "/api/battery/log/stop", HTTP_POST, handleBatteryStop);
+        route(apiServer, "/api/battery/run", HTTP_GET, handleBatteryRun);
+        route(apiServer, "/api/battery/run/delete", HTTP_POST, handleBatteryRunDelete);
+        route(apiServer, "/api/battery/cal", HTTP_POST, handleBatteryCal);
+        route(apiServer, "/api/battery/cal/reset", HTTP_POST, handleBatteryCalReset);
     }
     else
     {

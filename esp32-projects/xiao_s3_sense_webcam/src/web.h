@@ -6,3 +6,6 @@
 // setting changes work while someone is watching. (The sibling projects'
 // synchronous WebServer.h, serviced from loop(), can't do that.)
 void startWebServers();
+
+// Open MJPEG streams right now (for status and the battery log).
+int streamClientCount();

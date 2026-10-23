@@ -41,6 +41,7 @@ constexpr int CAM_XCLK_HZ = 20000000;
 // -----------------------------------------------------------------------------
 constexpr int SD_CS = 21;
 constexpr uint32_t SD_FREQUENCY_HZ = 20000000;
+constexpr uint32_t SD_SLOW_FREQUENCY_HZ = 4000000; // fallback if a slot fails at full speed
 
 extern const char *PHOTO_DIR; // "/photos"
 constexpr size_t PHOTO_NAME_MAX_LEN = 48;
@@ -58,16 +59,41 @@ constexpr size_t RAM_PHOTOS_MAX_BYTES = 4UL * 1024 * 1024;
 // -----------------------------------------------------------------------------
 constexpr int TOUCH_INT_PIN = 44;      // D7, active LOW while touched
 constexpr uint8_t TOUCH_I2C_ADDR = 0x2E;
-constexpr int ROUND_SD_CS = 3;          // the display's own SD slot (unused) -- held HIGH
+constexpr int ROUND_SD_CS = 3;          // D2: the display's own SD slot -- also tried for the card; held HIGH when unused
 constexpr uint8_t DISPLAY_ROTATION = 0; // 0-3; change if the preview comes out rotated
-// jpg2rgb565 writes big-endian RGB565, which the panel wants as-is. Flip this
-// if the preview shows blue/orange swapped.
-constexpr bool PREVIEW_SWAP_BYTES = false;
+// RGB565 byte order of jpg2rgb565's output vs. what pushImage() sends. false
+// gave rainbow banding on smooth tones (a cream wall came out red/purple/
+// green/yellow) -- the classic swapped-bytes look -- so the bytes are swapped.
+constexpr bool PREVIEW_SWAP_BYTES = true;
 constexpr uint32_t SCREEN_IDLE_OFF_MS = 2UL * 60 * 1000; // no touch for this long -> off
 constexpr uint32_t CONFIRM_TIMEOUT_MS = 10000;           // unanswered Yes/No -> back to preview
 // A touch only counts as a new tap after this long with no touch reports, so a
 // held finger (the controller keeps pulsing INT) fires once.
 constexpr uint32_t TOUCH_REARM_MS = 300;
+// After every screen change (wake, prompt, No -> preview), touch reports are
+// ignored for this long. The controller can report again when the finger
+// lifts; without this, lifting off "No" re-opened the prompt.
+constexpr uint32_t TOUCH_LOCKOUT_MS = 1000;
+
+// -----------------------------------------------------------------------------
+// LiPo on the round display's battery connector -- see battery.cpp. The
+// display routes the battery to A0 through a divider (and the KE switch).
+// Seeed doesn't publish the ratio; its example's thresholds (1850 mV empty,
+// "1850 ~ 2100" in its comment) fit 1:2 for a 3.7-4.2 V LiPo, so that's the
+// assumption for the battery-voltage estimate. The % only uses A0 mV, so the
+// ratio doesn't affect it.
+// -----------------------------------------------------------------------------
+constexpr int BATTERY_ADC_PIN = 1; // A0 / D0
+constexpr int BATTERY_ADC_SAMPLES = 16;
+constexpr float BATTERY_DIVIDER = 2.0f;
+// Uncalibrated % = linear between these (A0 mV). Seeed's example #defines full
+// as 2450, which contradicts its own comment and a 1:2 divider; 2100 is used.
+// A discharge run replaces both with a measured curve (see README).
+constexpr int BATTERY_FULL_A0_MV = 2100;
+constexpr int BATTERY_EMPTY_A0_MV = 1850;
+constexpr int BATTERY_MIN_VALID_A0_MV = 300; // below this: no battery seen on A0
+constexpr uint32_t BATTERY_READ_INTERVAL_MS = 5000;
+constexpr size_t BATTERY_LOG_MIN_FREE_BYTES = 16 * 1024; // stop logging below this
 
 // -----------------------------------------------------------------------------
 // Clock: only used to name snapshots.

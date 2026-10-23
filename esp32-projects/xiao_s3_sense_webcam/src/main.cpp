@@ -1,4 +1,5 @@
 #include "app.h"
+#include "battery.h"
 #include "camera.h"
 #include "screen.h"
 #include "storage.h"
@@ -11,7 +12,8 @@
 #include "secrets.h" // WIFI_SSID / WIFI_PASSWORD -- gitignored
 
 // Everything request-driven runs in the two esp_http_server tasks (web.cpp);
-// loop() keeps WiFi up and runs the round display (screen.cpp).
+// loop() keeps WiFi up, runs the round display (screen.cpp) and samples the
+// battery (battery.cpp).
 
 namespace
 {
@@ -105,6 +107,7 @@ void setup()
     cameraInit(); // the page still comes up without it, and says so
     setupScreen(); // before mountSd(): the card rides on the display's SPI bus
     mountSd();
+    setupBattery();
 
     wifiWasUp = connectWiFi(WIFI_CONNECT_TIMEOUT_MS);
     if (wifiWasUp)
@@ -125,6 +128,7 @@ void loop()
 {
     serviceWiFi();
     serviceScreen();
+    serviceBattery();
     if (!screenOn())
         delay(5); // idle; while the preview runs, decoding paces the loop
 }

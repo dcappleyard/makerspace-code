@@ -12,6 +12,8 @@ const char INDEX_HTML[] = R"HTML(<!DOCTYPE html>
 <style>
 :root{--bg:#f6f6f4;--panel:#fff;--text:#1d1d1b;--muted:#6b6b66;--line:#e2e2dd;--accent:#2563eb;--accent-text:#fff;--warn:#b4400c;--ok:#15803d;--shadow:0 1px 3px rgba(0,0,0,.08)}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1f1f1d;--text:#ecece8;--muted:#9a9a93;--line:#33332f;--accent:#60a5fa;--accent-text:#0b1220;--warn:#f59e0b;--ok:#4ade80;--shadow:none}}
+:root{--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--grid:#e8e8e3}
+@media (prefers-color-scheme:dark){:root{--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--grid:#2a2a27}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,sans-serif}
 header{display:flex;flex-wrap:wrap;align-items:baseline;gap:.4rem 1rem;padding:.8rem 1rem;border-bottom:1px solid var(--line)}
@@ -52,6 +54,30 @@ input[type=checkbox]{width:1.1rem;height:1.1rem;accent-color:var(--accent)}
 .thumb img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#000}
 .thumb div{font-size:.72rem;padding:.3rem .4rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .thumb .tmp{color:var(--warn);font-weight:600}
+#battery-wrap{grid-column:1/-1}
+.batt-now{display:flex;flex-wrap:wrap;gap:.4rem 2rem;align-items:baseline;margin:.2rem 0 .4rem}
+.batt-now .big{font-size:1.6rem;font-weight:600;font-variant-numeric:tabular-nums}
+.batt-now .lbl{font-size:.8rem;color:var(--muted)}
+select.inline{font:inherit;padding:.3rem;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px}
+#chart{position:relative;margin-top:.8rem}
+#chart svg{width:100%;height:auto;display:block;overflow:visible}
+#chart .axis text{fill:var(--muted);font-size:11px}
+#chart .grid line{stroke:var(--grid);stroke-width:1}
+#chart .series path{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+#chart .endlabel{font-size:11px;fill:var(--text)}
+#chart .cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+#chart .dot{stroke:var(--panel);stroke-width:2}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.15);padding:.4rem .6rem;font-size:.8rem;display:none;white-space:nowrap;z-index:2}
+#tip .sw{display:inline-block;width:.7rem;height:.15rem;border-radius:2px;vertical-align:middle;margin-right:.35rem}
+.legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;font-size:.8rem;color:var(--muted);margin-top:.4rem}
+.legend .sw{display:inline-block;width:1rem;height:.2rem;border-radius:2px;vertical-align:middle;margin-right:.35rem}
+table.runs{width:100%;border-collapse:collapse;margin-top:.8rem;font-size:.85rem}
+table.runs th{text-align:left;font-weight:600;color:var(--muted);font-size:.75rem;border-bottom:1px solid var(--line);padding:.3rem .4rem}
+table.runs td{border-bottom:1px solid var(--line);padding:.3rem .4rem;font-variant-numeric:tabular-nums}
+table.runs td.act{white-space:nowrap;text-align:right}
+table.runs td.act a,table.runs td.act button{font-size:.78rem;padding:.2rem .5rem;margin-left:.2rem}
+table.runs a{color:var(--accent)}
+.runs-wrap{overflow-x:auto}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;flex-direction:column;align-items:center;justify-content:center;padding:1rem;z-index:10}
 #lightbox.open{display:flex}
 #lightbox img{max-width:100%;max-height:80vh;border-radius:6px}
@@ -95,6 +121,32 @@ input[type=checkbox]{width:1.1rem;height:1.1rem;accent-color:var(--accent)}
     </div>
     <div id="gallery"></div>
     <div class="actions"><button id="moreBtn" hidden>Show more</button></div>
+  </section>
+
+  <section class="panel" id="battery-wrap">
+    <div class="gallery-head">
+      <h2>Battery</h2>
+      <span class="hint">Round display LiPo, read on A0</span>
+    </div>
+    <div class="batt-now" id="battNow"></div>
+    <div class="actions">
+      <label class="hint">Log every
+        <select id="logInterval" class="inline">
+          <option value="10">10 s</option><option value="30" selected>30 s</option>
+          <option value="60">1 min</option><option value="120">2 min</option>
+        </select>
+      </label>
+      <button id="logBtn" class="primary">Start logging</button>
+      <span id="logStatus" class="hint"></span>
+    </div>
+    <p class="hint">To record a discharge curve: charge the battery fully, unplug USB-C, then start logging and leave it running until the board shuts off. The log is kept in the camera's flash, so it survives the battery dying. Plug back in and the run is here to plot, download or use for calibration.</p>
+    <div id="chart"><div id="tip"></div></div>
+    <div class="legend" id="legend"></div>
+    <div class="runs-wrap"><table class="runs" id="runs"></table></div>
+    <div class="actions">
+      <span id="calInfo" class="hint"></span>
+      <button id="calReset">Reset calibration</button>
+    </div>
   </section>
 </main>
 
@@ -171,6 +223,8 @@ function renderStatus() {
   parts.push(s.clock_set ? s.clock : '<span class="warn">clock not set — snapshots get nodate_ names</span>');
   parts.push(s.sd ? 'SD: ' + s.sd_free_mb + ' MB free'
                   : '<span class="warn">no SD card — ' + s.ram_photos + '/' + s.ram_photos_max + ' snapshots in RAM</span>');
+  const b = s.battery;
+  if (b && b.valid) parts.push('Battery ' + (b.battery_mv / 1000).toFixed(2) + ' V · ' + b.percent + '% est.' + (b.usb_host ? ' · USB' : ''));
   parts.push('PSRAM free ' + fmtBytes(s.psram_free));
   $('status').innerHTML = parts.map(p => '<span>' + p + '</span>').join('');
   $('sdNote').textContent = s.sd ? '' : 'Temporary snapshots move to the card when one is found.';
@@ -408,9 +462,274 @@ $('sdBtn').onclick = async () => {
   btn.disabled = false;
 };
 
+// --- Battery ----------------------------------------------------------------
+let batt = null;
+const runCache = {};   // name -> {size, points, meta}
+const plotted = [];    // run names on the chart, in the order they were added
+const slotOf = {};     // name -> series slot 1-4; kept while plotted, so colours never shift
+const MAX_PLOTTED = 4;
+let chartGeom = null;
+
+function fmtDuration(s) {
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm ' + String(s % 60).padStart(2, '0') + 's';
+}
+
+function parseRun(text) {
+  const lines = text.trim().split('\n');
+  const head = lines.shift().split(',');
+  const col = k => head.indexOf(k);
+  const iT = col('elapsed_s'), iA = col('a0_mv'), iB = col('battery_mv_est'), iP = col('percent_est'),
+        iU = col('usb_host'), iE = col('event'), iL = col('local_time');
+  const points = [], meta = {usbSamples: 0, boots: 0, started: '', end: ''};
+  for (const line of lines) {
+    const c = line.split(',');
+    const ev = c[iE] || '';
+    if (ev === 'start' && !meta.started) meta.started = c[iL];
+    if (ev === 'boot') meta.boots++;
+    if (ev) { if (ev !== 'start' && ev !== 'boot') meta.end = ev; continue; }
+    const p = {t: +c[iT], a0: +c[iA], mv: +c[iB], pct: +c[iP]};
+    if (+c[iU]) meta.usbSamples++;
+    if (p.a0 > 0) points.push(p);
+  }
+  return {points, meta};
+}
+
+async function loadRun(r) {
+  const c = runCache[r.name];
+  if (c && c.size === r.size) return c;
+  const text = await fetch('/api/battery/run?name=' + encodeURIComponent(r.name)).then(x => x.text());
+  return runCache[r.name] = Object.assign({size: r.size}, parseRun(text));
+}
+
+async function loadBattery() {
+  try { batt = await api('/api/battery'); } catch (e) { return; }
+  renderBatteryNow();
+  // Newest run plotted by default, the first time we see any.
+  if (!plotted.length && batt.runs.length && !loadBattery.seeded) {
+    loadBattery.seeded = true;
+    togglePlot(batt.runs[0].name, true, false);
+  }
+  for (const r of batt.runs.slice(0, 12)) { try { await loadRun(r); } catch (e) {} }
+  for (let i = plotted.length - 1; i >= 0; i--)
+    if (!batt.runs.some(r => r.name === plotted[i])) togglePlot(plotted[i], false, false);
+  // Only rebuild the table and chart when something changed, so a refresh
+  // doesn't wipe a tooltip someone is reading.
+  const sig = JSON.stringify([batt.runs, plotted]);
+  if (sig !== loadBattery.sig) {
+    loadBattery.sig = sig;
+    renderRuns();
+    drawChart();
+  }
+}
+
+function renderBatteryNow() {
+  const b = batt, el = $('battNow');
+  const items = [];
+  if (b.valid) {
+    items.push('<div><div class="big">' + (b.battery_mv / 1000).toFixed(2) + ' V</div><div class="lbl">battery (est., A0 ' + b.a0_mv + ' mV × ' + b.divider + ')</div></div>');
+    items.push('<div><div class="big">' + b.percent + '%</div><div class="lbl">estimated charge</div></div>');
+  } else {
+    items.push('<div><div class="big">—</div><div class="lbl">no battery voltage on A0 (' + b.a0_mv + ' mV) — no battery, or the KE switch isn\'t routing it</div></div>');
+  }
+  items.push('<div><div class="big" style="font-size:1.1rem">' + (b.usb_host ? 'Computer on USB' : 'No USB host') + '</div><div class="lbl">' +
+    (b.usb_host ? 'likely charging' : 'running on battery, or a power-only charger') + '</div></div>');
+  el.innerHTML = items.join('');
+  const L = b.log;
+  $('logBtn').textContent = L.active ? 'Stop logging' : 'Start logging';
+  $('logBtn').classList.toggle('primary', !L.active);
+  $('logInterval').disabled = L.active;
+  if (L.active) $('logInterval').value = String(L.interval_s);
+  $('logStatus').textContent = L.active
+    ? 'Logging ' + L.run + ' · ' + fmtDuration(L.elapsed_s) + ' · ' + L.samples + ' samples'
+    : (b.fs ? fmtBytes(b.fs_free) + ' free for logs' : 'flash filesystem unavailable');
+  $('calInfo').textContent = b.cal_source
+    ? 'Percentage calibrated from ' + b.cal_source + ' (100%: ' + b.cal[0] + ' mV, 0%: ' + b.cal[10] + ' mV on A0).'
+    : 'Percentage uncalibrated: linear ' + b.cal[10] + '–' + b.cal[0] + ' mV on A0.';
+  $('calReset').hidden = !b.cal_source;
+}
+
+$('logBtn').onclick = async () => {
+  const L = batt && batt.log;
+  try {
+    if (L && L.active) {
+      if (!confirm('Stop logging ' + L.run + '?')) return;
+      batt = await post('/api/battery/log/stop');
+    } else {
+      if (batt && batt.usb_host && !confirm('A computer is connected over USB, so the battery is probably charging. Start logging anyway?')) return;
+      if (batt && !batt.valid && !confirm('No battery voltage is showing on A0. Start logging anyway?')) return;
+      batt = await post('/api/battery/log/start?interval=' + $('logInterval').value);
+      const r = batt.runs.find(r => r.active);
+      if (r) togglePlot(r.name, true, false);
+    }
+    loadBattery();
+  } catch (e) { msg(e.message, true); }
+};
+
+$('calReset').onclick = async () => {
+  if (!confirm('Go back to the uncalibrated linear estimate?')) return;
+  try { batt = await post('/api/battery/cal/reset'); renderBatteryNow(); msg('Calibration reset'); }
+  catch (e) { msg(e.message, true); }
+};
+
+function togglePlot(name, on, redraw = true) {
+  const i = plotted.indexOf(name);
+  if (on && i < 0) {
+    if (plotted.length >= MAX_PLOTTED) { msg('Up to ' + MAX_PLOTTED + ' runs at once — untick one first', true); redraw && renderRuns(); return; }
+    const used = new Set(plotted.map(n => slotOf[n]));
+    slotOf[name] = [1, 2, 3, 4].find(k => !used.has(k));
+    plotted.push(name);
+  } else if (!on && i >= 0) {
+    plotted.splice(i, 1);
+    delete slotOf[name];
+  }
+  if (redraw) { renderRuns(); drawChart(); }
+}
+
+function renderRuns() {
+  const t = $('runs');
+  if (!batt || !batt.runs.length) { t.innerHTML = '<tr><td class="hint">No runs logged yet.</td></tr>'; return; }
+  let h = '<tr><th>Plot</th><th>Run</th><th>Started</th><th>Duration</th><th>Samples</th><th>Battery V</th><th>Ended</th><th></th></tr>';
+  for (const r of batt.runs) {
+    const c = runCache[r.name], p = c ? c.points : [];
+    const on = plotted.includes(r.name);
+    const dur = p.length > 1 ? fmtDuration(p[p.length - 1].t - p[0].t) : '—';
+    const volts = p.length ? (p[0].mv / 1000).toFixed(2) + ' → ' + (p[p.length - 1].mv / 1000).toFixed(2) : '—';
+    const ended = r.active ? 'logging…' : c ? (c.meta.end || 'power lost') + (c.meta.boots ? ' (' + c.meta.boots + ' reboot' + (c.meta.boots > 1 ? 's' : '') + ')' : '') : '';
+    const sw = on ? '<span class="sw" style="display:inline-block;width:.8rem;height:.2rem;border-radius:2px;vertical-align:middle;margin-left:.3rem;background:var(--series-' + slotOf[r.name] + ')"></span>' : '';
+    h += '<tr><td><input type="checkbox" data-plot="' + r.name + '"' + (on ? ' checked' : '') + '>' + sw + '</td>' +
+         '<td>' + r.name.replace('.csv', '') + '</td><td>' + (c && c.meta.started || '—') + '</td><td>' + dur + '</td><td>' + p.length +
+         '</td><td>' + volts + '</td><td>' + ended + '</td><td class="act">' +
+         '<a href="/api/battery/run?name=' + r.name + '" download="' + r.name + '">CSV</a>' +
+         '<button data-cal="' + r.name + '"' + (r.active ? ' disabled' : '') + '>Calibrate</button>' +
+         '<button data-del="' + r.name + '"' + (r.active ? ' disabled' : '') + '>Delete</button></td></tr>';
+  }
+  t.innerHTML = h;
+  t.querySelectorAll('[data-plot]').forEach(x => x.onchange = () => togglePlot(x.dataset.plot, x.checked));
+  t.querySelectorAll('[data-del]').forEach(x => x.onclick = () => deleteRunUi(x.dataset.del));
+  t.querySelectorAll('[data-cal]').forEach(x => x.onclick = () => calibrateFrom(x.dataset.cal));
+}
+
+async function deleteRunUi(name) {
+  if (!confirm('Delete ' + name + '? This can\'t be undone.')) return;
+  try {
+    batt = await post('/api/battery/run/delete?name=' + encodeURIComponent(name));
+    togglePlot(name, false, false);
+    delete runCache[name];
+    loadBattery();
+  } catch (e) { msg(e.message, true); }
+}
+
+// The run's time axis becomes the % axis: assuming it went from full charge
+// to shutdown at a steady load, x% of the elapsed time = (100 - x)% used.
+// Each 10% point is the median A0 reading within ±2% of the run around it.
+async function calibrateFrom(name) {
+  const c = runCache[name];
+  const p = c ? c.points : [];
+  if (p.length < 20) { msg('Need at least 20 samples in a run to calibrate from it', true); return; }
+  const t0 = p[0].t, T = p[p.length - 1].t - t0;
+  if (T < 1800) { msg('That run is under 30 minutes — too short to calibrate from', true); return; }
+  const mv = [];
+  for (let i = 0; i <= 10; i++) {
+    const target = t0 + T * i / 10, w = T * 0.02;
+    const near = p.filter(q => Math.abs(q.t - target) <= w).map(q => q.a0).sort((a, b) => a - b);
+    let v = near.length ? near[Math.floor(near.length / 2)] : p.reduce((a, q) => Math.abs(q.t - target) < Math.abs(a.t - target) ? q : a).a0;
+    if (i && v > mv[i - 1]) v = mv[i - 1]; // keep it non-increasing
+    mv.push(v);
+  }
+  const table = mv.map((v, i) => (100 - i * 10) + '%: ' + v + ' mV').join('\n');
+  const warn = c.meta.usbSamples ? '\n\nNote: ' + c.meta.usbSamples + ' samples had a USB host connected (charging?).' : '';
+  if (!confirm('Use ' + name + ' as the 100% → 0% curve?\nThis assumes the run started fully charged and ran until the board shut off, at a steady load.' + warn + '\n\nA0 per 10%:\n' + table)) return;
+  try {
+    batt = await post('/api/battery/cal?src=' + encodeURIComponent(name) + '&mv=' + mv.join(','));
+    renderBatteryNow();
+    msg('Calibrated from ' + name);
+  } catch (e) { msg(e.message, true); }
+}
+
+// One line per plotted run: battery V (est.) against hours since the run began.
+function drawChart() {
+  const host = $('chart');
+  host.querySelectorAll('svg').forEach(x => x.remove());
+  const series = plotted.map(n => ({name: n, slot: slotOf[n], pts: (runCache[n] || {}).points || []})).filter(x => x.pts.length);
+  const legend = $('legend');
+  legend.innerHTML = series.length >= 2
+    ? series.map(x => '<span><span class="sw" style="background:var(--series-' + x.slot + ')"></span>' + x.name.replace('.csv', '') + '</span>').join('')
+    : '';
+  if (!series.length) { chartGeom = null; return; }
+
+  const W = 680, H = 260, m = {l: 44, r: 64, t: 12, b: 30};
+  const tMax = Math.max(...series.map(x => x.pts[x.pts.length - 1].t - x.pts[0].t), 60) / 3600;
+  let vMin = Infinity, vMax = -Infinity;
+  series.forEach(x => x.pts.forEach(q => { vMin = Math.min(vMin, q.mv); vMax = Math.max(vMax, q.mv); }));
+  vMin = Math.floor(vMin / 100) * 100 / 1000; vMax = Math.ceil(vMax / 100) * 100 / 1000;
+  if (vMax - vMin < 0.2) { vMin -= 0.1; vMax += 0.1; }
+  const X = h => m.l + (W - m.l - m.r) * h / tMax;
+  const Y = v => m.t + (H - m.t - m.b) * (1 - (v - vMin) / (vMax - vMin));
+  const niceStep = (span, n) => { const r = span / n, p = Math.pow(10, Math.floor(Math.log10(r))); return [1, 2, 2.5, 5, 10].map(k => k * p).find(k => k >= r); };
+
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Battery voltage over time">';
+  svg += '<g class="grid axis">';
+  const vs = niceStep(vMax - vMin, 4);
+  for (let v = Math.ceil(vMin / vs) * vs; v <= vMax + 1e-9; v += vs)
+    svg += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(v) + '" y2="' + Y(v) + '"/><text x="' + (m.l - 6) + '" y="' + (Y(v) + 4) + '" text-anchor="end">' + v.toFixed(2) + '</text>';
+  const hs = niceStep(tMax, 6);
+  for (let h = 0; h <= tMax + 1e-9; h += hs)
+    svg += '<text x="' + X(h) + '" y="' + (H - m.b + 16) + '" text-anchor="middle">' + (+h.toFixed(2)) + (h === 0 ? ' h' : '') + '</text>';
+  svg += '<text x="' + m.l + '" y="' + (m.t - 2) + '">V (est.)</text></g>';
+  svg += '<g class="series">';
+  for (const x of series) {
+    const t0 = x.pts[0].t;
+    const d = x.pts.map((q, i) => (i ? 'L' : 'M') + X((q.t - t0) / 3600).toFixed(1) + ' ' + Y(q.mv / 1000).toFixed(1)).join('');
+    svg += '<path d="' + d + '" style="stroke:var(--series-' + x.slot + ')"/>';
+  }
+  svg += '</g>';
+  // Direct labels at the line ends (<= 4 series), nudged apart vertically.
+  const ends = series.map(x => { const q = x.pts[x.pts.length - 1]; return {x: X((q.t - x.pts[0].t) / 3600), y: Y(q.mv / 1000), label: x.name.replace('.csv', '').replace('run-', '#')}; })
+                     .sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
+  for (const e of ends) svg += '<text class="endlabel" x="' + (e.x + 6) + '" y="' + (e.y + 4) + '">' + e.label + '</text>';
+  svg += '<g id="crossg" style="display:none"><line class="cross" id="crossl" y1="' + m.t + '" y2="' + (H - m.b) + '"/></g>';
+  svg += '<rect id="hit" x="' + m.l + '" y="' + m.t + '" width="' + (W - m.l - m.r) + '" height="' + (H - m.t - m.b) + '" fill="transparent"/></svg>';
+  host.insertAdjacentHTML('afterbegin', svg);
+  chartGeom = {W, m, X, Y, tMax, series};
+  const el = host.querySelector('svg');
+  el.addEventListener('pointermove', crosshair);
+  el.addEventListener('pointerleave', () => { $('tip').style.display = 'none'; host.querySelector('#crossg').style.display = 'none'; });
+}
+
+function crosshair(ev) {
+  const g = chartGeom, host = $('chart'), svg = host.querySelector('svg');
+  if (!g) return;
+  const box = svg.getBoundingClientRect(), scale = g.W / box.width;
+  const px = (ev.clientX - box.left) * scale;
+  const h = Math.max(0, Math.min(g.tMax, (px - g.m.l) / (g.W - g.m.l - g.m.r) * g.tMax));
+  const cg = host.querySelector('#crossg');
+  cg.style.display = '';
+  cg.querySelectorAll('circle').forEach(c => c.remove());
+  host.querySelector('#crossl').setAttribute('x1', g.X(h));
+  host.querySelector('#crossl').setAttribute('x2', g.X(h));
+  let rows = '';
+  for (const x of g.series) {
+    const t0 = x.pts[0].t, want = t0 + h * 3600;
+    if (want > x.pts[x.pts.length - 1].t + 1) { rows += '<div><span class="sw" style="background:var(--series-' + x.slot + ')"></span>' + x.name.replace('.csv', '') + ': ended</div>'; continue; }
+    const q = x.pts.reduce((a, b) => Math.abs(b.t - want) < Math.abs(a.t - want) ? b : a);
+    cg.insertAdjacentHTML('beforeend', '<circle class="dot" r="4" cx="' + g.X((q.t - t0) / 3600) + '" cy="' + g.Y(q.mv / 1000) + '" style="fill:var(--series-' + x.slot + ')"/>');
+    rows += '<div><span class="sw" style="background:var(--series-' + x.slot + ')"></span>' + x.name.replace('.csv', '') + ': <b>' + (q.mv / 1000).toFixed(3) + ' V</b> · A0 ' + q.a0 + ' mV · ' + q.pct + '% est.</div>';
+  }
+  const tip = $('tip');
+  tip.innerHTML = '<div style="color:var(--muted);margin-bottom:.2rem">' + fmtDuration(h * 3600) + ' in</div>' + rows;
+  tip.style.display = 'block';
+  const left = (ev.clientX - box.left) + 14;
+  tip.style.left = Math.min(left, box.width - tip.offsetWidth - 4) + 'px';
+  tip.style.top = Math.max(0, ev.clientY - box.top - tip.offsetHeight - 10) + 'px';
+}
+
 buildControls();
-loadStatus().then(loadPhotos);
+loadStatus().then(loadPhotos).then(loadBattery);
 setInterval(loadStatus, 5000);
+setInterval(loadBattery, 15000);
 </script>
 </body></html>
 )HTML";
