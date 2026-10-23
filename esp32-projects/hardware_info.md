@@ -41,6 +41,7 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
   - live MJPEG stream you can toggle on and off
   - date-time-named snapshots, kept on SD, or in PSRAM when there's no card
   - auto and manual exposure/gain controls persisted in NVS
+- Also used by: `xiao_s3_sense_photobooth/`, a touch-driven three-shot photo booth that light-sleeps between uses; see its README.
 - Optional add-on: the 1.28" round touch display (next section), stacked on the same board.
 
 ## 1.28" Round Touch Display for XIAO
@@ -49,8 +50,8 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
 - Panel: GC9A01, 240×240 round IPS, on SPI.
 - Touch: CHSC6X at I2C 0x2E. A read is 5 bytes with no register address: byte 0 == 1 means pressed, x = byte 2, y = byte 4. INT goes LOW on touch.
 - Also on the board:
-  - a PCF8563 RTC on the same I2C bus (unused so far)
-  - its own microSD slot
+  - a PCF8563 RTC (I2C 0x51) on the same bus, with a coin cell. `xiao_s3_sense_photobooth/` keeps UTC in it, set from NTP at boot when WiFi credentials exist.
+  - its own microSD slot (CS D2 / GPIO3), on the same SPI pins. With the display fitted, Seeed's Sense wiki says to `SD.begin(D2)`, i.e. use this slot. On our unit a 16 GB FAT32 card here mounts at 20 MHz on the display's SPI instance (`xiao_s3_sense_photobooth/`). An empty slot takes ~600 ms for `SD.begin` to give up on.
   - a battery connector with a power switch
 - Pins (XIAO → ESP32-S3 GPIO):
 
@@ -68,16 +69,28 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
   - No LCD reset line.
   - D6/D7 are the UART0 TX/RX pins, which is fine because the XIAO's Serial is native USB.
 - Switches:
-  - **KE** must be ON for GPIO43 to control the backlight; ON also enables battery reading on A0.
+  - **KE**: a 2-position DIP switch, marked "ON KE" on one edge and "1 2" on the other. One switch routes GPIO43 to the backlight, the other routes battery voltage to A0 (Seeed: "2-bit Switch to control the screen backlight and battery voltage readout").
+    - Seeed doesn't say which number is which, or which physical side its "ON" means.
+    - On our unit, the backlight works with **both switches OFF** (away from the printed "ON"); with both toward "ON" it stayed completely unlit. That's the opposite of the wiki's wording ("ON side" enables backlight control), so don't trust the printed ON.
+    - Not yet confirmed: whether GPIO43 really switches the backlight in this position, or it's simply always on. Check that no glow remains after "Yes" turns the screen off.
+    - Both switches can sit on the same side, since nothing here uses A0.
   - The **power** switch cuts battery power. It's bypassed when the board is powered over USB.
+- Battery: the LiPo connector feeds the XIAO's own charger; charging happens over the XIAO's USB-C.
+  - **Voltage:** on A0 (GPIO1) through a divider, routed by the KE switch. Seeed doesn't publish the ratio; its example thresholds (1850 mV empty, "1850 ~ 2100" in a comment, though its full `#define` says 2450) fit 1:2 for a 3.7-4.2 V cell.
+  - **No charge status or fuel gauge.** The XIAO's charge LED (bright = charging, off = full) isn't wired to a GPIO. % can only be estimated from voltage.
+  - **USB detection:** the ESP32-S3 can tell when a USB *host* is attached (`HWCDC::isPlugged()` watches for USB start-of-frame packets). A power-only charger looks the same as no USB at all.
+  - `xiao_s3_sense_webcam/` logs discharge runs to internal flash and calibrates its % estimate from them.
 - Library: `Seeed_GFX` with `BOARD_SCREEN_COMBO 501` in `lib/driver/driver.h`, which selects `User_Setups/Setup501_Seeed_XIAO_Round_Display.h`.
 - **Shared SPI with the Sense SD slot:**
   - The LCD's SCK/MISO/MOSI are the same GPIO 7/8/9 the Sense expansion board's microSD uses (CS 21).
   - Setup501 sets `USE_HSPI_PORT` on the S3, so Seeed_GFX drives those pins from its own `SPIClass(HSPI)`.
   - An SD card on the global `SPI` (FSPI) would fight it for the pins.
   - The fix is to mount SD on the display's instance: `SD.begin(cs, TFT_eSPI::getSPIinstance(), …)`, after `tft.begin()`.
+- Light-sleep wake: touch INT (GPIO44) can wake the ESP32-S3 from **light** sleep but not deep sleep, since only GPIO0-21 are RTC-capable. `xiao_s3_sense_photobooth/` relies on this; it's not yet verified on hardware.
 - Camera compatibility: no conflict with the Sense camera, whose pins (GPIO 10–18, 38–40, 47, 48) don't overlap. Its SCCB is on I2C port 1, while touch uses `Wire` (port 0).
 - Used by: `xiao_s3_sense_webcam/`:
   - tap-to-wake live camera preview, cropped to the circle
   - a second tap for a Yes/No "turn screen off?" prompt
   - 2-minute auto-off
+  - battery voltage / estimated % on the web page, with discharge logging and calibration
+- Also used by: `xiao_s3_sense_photobooth/` (live view, Capture? prompt, countdown/flash/review overlays, tap-to-wake from light sleep).
