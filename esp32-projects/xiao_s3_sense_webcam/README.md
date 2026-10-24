@@ -190,6 +190,8 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 
 **Verified on hardware:** the round display lights and shows the preview, with both KE switches OFF. The colour fix (`PREVIEW_SWAP_BYTES = true`) and the 1-second touch lockout after "No" came after that test.
 
+**Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts, and snapshots land in `/photos/`.
+
 **Verified:** with battery logging added, it builds clean at 38% flash (1,271,082 of 3,342,336 bytes). The battery panel, chart, tooltip and calibration were exercised in a browser against a mock of the API, with synthetic runs.
 
 **Battery, not yet run on hardware.** Check, in order:

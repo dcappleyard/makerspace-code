@@ -61,7 +61,7 @@ Photo names need the time. The round display has a **PCF8563 RTC** with a coin c
 ## Setup
 
 1. **Optional: copy `include/secrets.h.example` to `include/secrets.h`** and set `WIFI_SSID` / `WIFI_PASSWORD`, so the clock gets set from NTP at boot. It's gitignored, and the build works without it.
-2. **Insert a FAT32 microSD card** in the Sense board's slot. The firmware creates `/photos/` itself.
+2. **Insert a FAT32 microSD card** in either slot: the Sense board's, or the round display's. The firmware creates `/photos/` itself.
 3. **Set the display's KE switches:** both OFF worked on our unit; see `../hardware_info.md`.
 4. **Flash** from this folder:
    ```
@@ -98,7 +98,8 @@ The booth already shuts WiFi down after the boot sync, so an upload step would b
 - display rotated 90° clockwise (`DISPLAY_ROTATION = 1`)
 - 1 s countdown steps, 3 s review
 - capture reordered for a shorter flash
-- both SD slots tried
+
+**Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts at 20 MHz, and photos land in `/photos/`.
 
 **Builds:** clean with and without `secrets.h` (16.3% flash without WiFi, 33.5% with).
 
