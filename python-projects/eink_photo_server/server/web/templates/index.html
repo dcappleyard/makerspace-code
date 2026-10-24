@@ -8,11 +8,7 @@
 </head>
 <body>
 {% include "_nav.html" %}
-<div class="row muted">
-  Timezone {{ tz }} · pipelines: {{ pipelines|join(", ") }}
-  <form method="post" action="/ui/reload"><button>Reload devices.yaml</button></form>
-</div>
-{% if not devices %}<p class="warn">No frames configured — add some to devices.yaml and reload.</p>{% endif %}
+{% if not devices %}<p class="warn">No frames configured — add some to devices.yaml and reload them on the <a href="/frames">Frames</a> tab.</p>{% endif %}
 
 <h2>Upload</h2>
 <div class="card">

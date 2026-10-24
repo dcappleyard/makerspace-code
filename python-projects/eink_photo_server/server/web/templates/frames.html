@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frames · eInk Photo Server</title>
+{% include "_style.html" %}
+</head>
+<body>
+{% include "_nav.html" %}
+<div class="row muted">
+  Timezone {{ tz }} · pipelines: {{ pipelines|join(", ") }}
+  <form method="post" action="/ui/reload"><button>Reload devices.yaml</button></form>
+</div>
+{% if not frames %}<p class="warn">No frames configured — add some to devices.yaml and reload.</p>{% endif %}
+<div class="grid">
+{% for f in frames %}{% set d, st = f.dev, f.state %}
+  <div class="card">
+    <div class="row"><h3><a href="/frame/{{ d.id }}">{{ d.name }}</a></h3>{% if st.paused %}<span class="warn">PAUSED</span>{% endif %}</div>
+    {% if st.last_photo_id and st.last_photo_id in photo_by_id %}<a href="/frame/{{ d.id }}"><img class="t" src="/ui/thumb/{{ st.last_photo_id }}" style="height:72px; margin:6px 0" alt=""></a>{% endif %}
+    <div class="muted">{{ d.protocol }} · {{ d.pipeline }} · {{ d.width }}×{{ d.height }}</div>
+    <div>Showing: {{ photo_by_id[st.last_photo_id].filename if st.last_photo_id in photo_by_id else "—" }}</div>
+    <div>Last pull: {{ st.last_pull_at|local }}</div>
+    <div>Next wake: {{ st.next_target|local }}</div>
+    {% if st.battery is not none %}<div>Battery: {{ st.battery }}%</div>{% endif %}
+    <div class="muted">{{ f.playlist_n }} photo{{ "s" if f.playlist_n != 1 }} in playlist</div>
+  </div>
+{% endfor %}
+</div>
+</body>
+</html>

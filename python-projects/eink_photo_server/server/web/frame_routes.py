@@ -41,6 +41,18 @@ def _events(conn, device_id: str, limit: int | None = LOG_ROWS) -> list[dict]:
     return [{**dict(r), "data": json.loads(r["data_json"])} for r in conn.execute(sql, (device_id,))]
 
 
+@router.get("/frames")
+def frames_page(request: Request):
+    with db.tx() as conn:
+        photo_by_id = {p["id"]: p for p in conn.execute("SELECT * FROM photos")}
+        frames = [{"dev": d, "state": db.state(conn, d.id), "playlist_n": len(db.playlist(conn, d.id))}
+                  for d in cfg.config.devices.values()]
+    return templates.TemplateResponse(request, "frames.html", {
+        "page": "frames", "frames": frames, "photo_by_id": photo_by_id,
+        "tz": str(cfg.config.tz), "pipelines": pipelines.names(),
+    })
+
+
 @router.get("/frame/{device_id}")
 def frame_page(request: Request, device_id: str):
     dev = device_or_404(device_id)

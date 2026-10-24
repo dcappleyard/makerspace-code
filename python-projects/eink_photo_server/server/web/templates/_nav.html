@@ -1,7 +1,13 @@
 <nav>
   <h1>eInk Photo Server</h1>
   <a href="/" class="{{ 'on' if page == 'home' }}">Library</a>
-  {% for d in nav_devices() %}<a href="/frame/{{ d.id }}" class="{{ 'on' if page == d.id }}">{{ d.name }}</a>
-  {% endfor %}<a href="/testcard" class="{{ 'on' if page == 'testcard' }}">Test card</a>
+  <a href="/frames" class="{{ 'on' if page not in ('home', 'testcard') }}">Frames</a>
+  <a href="/testcard" class="{{ 'on' if page == 'testcard' }}">Test card</a>
 </nav>
+{% if page not in ('home', 'testcard') %}
+<nav class="subnav">
+  <a href="/frames" class="{{ 'on' if page == 'frames' }}">All frames</a>
+  {% for d in nav_devices() %}<a href="/frame/{{ d.id }}" class="{{ 'on' if page == d.id }}">{{ d.name }}</a>{% endfor %}
+</nav>
+{% endif %}
 {% if request.query_params.error %}<p class="banner-error">⚠ {{ request.query_params.error }}</p>{% endif %}
