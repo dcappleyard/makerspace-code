@@ -47,8 +47,24 @@ def _duration(seconds) -> str:
 
 templates.env.filters["local"] = _local
 templates.env.filters["duration"] = _duration
-# Every page's nav lists the frames.
+# Every page's nav lists the sources, playlists and frames (for the sub-tabs).
 templates.env.globals["nav_devices"] = lambda: list(cfg.config.devices.values())
+
+
+def _nav_sources():
+    from .. import sources
+    return sources.raw_sources()
+
+
+def _nav_playlists():
+    from .. import db
+    with db.tx() as conn:
+        return [(f"playlist:{r['id']}", r["id"], r["name"])
+                for r in conn.execute("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE, id")]
+
+
+templates.env.globals["nav_sources"] = _nav_sources
+templates.env.globals["nav_playlists"] = _nav_playlists
 
 
 def back(request: Request, fallback: str = "/", error: str | None = None) -> RedirectResponse:

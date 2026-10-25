@@ -1,13 +1,18 @@
 <nav>
   <h1>eInk Photo Server</h1>
-  <a href="/" class="{{ 'on' if page == 'home' }}">Library</a>
-  <a href="/frames" class="{{ 'on' if page not in ('home', 'testcard') }}">Frames</a>
-  <a href="/testcard" class="{{ 'on' if page == 'testcard' }}">Test card</a>
+  <a href="/sources/library" class="{{ 'on' if section == 'sources' }}">Sources</a>
+  <a href="/playlists" class="{{ 'on' if section == 'playlists' }}">Playlists</a>
+  <a href="/frames" class="{{ 'on' if section == 'frames' }}">Frames</a>
 </nav>
-{% if page not in ('home', 'testcard') %}
 <nav class="subnav">
+{% if section == 'sources' %}
+  {% for key, name in nav_sources() %}<a href="/sources/{{ key }}" class="{{ 'on' if page == key }}">{{ name }}</a>{% endfor %}
+{% elif section == 'playlists' %}
+  <a href="/playlists" class="{{ 'on' if page == 'playlists' }}">All playlists</a>
+  {% for key, pid, name in nav_playlists() %}<a href="/playlist/{{ pid }}" class="{{ 'on' if page == key }}">{{ name }}</a>{% endfor %}
+{% elif section == 'frames' %}
   <a href="/frames" class="{{ 'on' if page == 'frames' }}">All frames</a>
   {% for d in nav_devices() %}<a href="/frame/{{ d.id }}" class="{{ 'on' if page == d.id }}">{{ d.name }}</a>{% endfor %}
-</nav>
 {% endif %}
+</nav>
 {% if request.query_params.error %}<p class="banner-error">⚠ {{ request.query_params.error }}</p>{% endif %}

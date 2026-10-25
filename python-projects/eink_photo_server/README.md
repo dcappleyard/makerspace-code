@@ -1,9 +1,9 @@
 # eink_photo_server
 
 One server that feeds all the e-ink photo frames. Frames **pull** on their own timers (battery frames sleep, so pushing is unreliable). The server:
-- stores uploaded photos
+- stores photos: uploaded in the web UI, uploaded by a client such as the photobooth, or dropped into a folder
 - prepares them for each frame type (crop, resize, tone tuning, encoding)
-- keeps a playlist per frame, with optional time-of-day windows
+- keeps shared playlists, and a daily schedule per frame that picks from a source or a playlist
 
 It runs in Docker on a Raspberry Pi.
 
@@ -23,7 +23,7 @@ Each device in `devices.yaml` pairs two things:
 
   It does **not** dither, because the frame dithers itself. Its `preview()` gives a Spectra 6 dither simulation for the UI.
 
-Playlists, scheduling and photo storage are shared by every device.
+Sources, playlists, scheduling and photo storage are shared by every device.
 
 ### Adding a pipeline
 1. Create `server/pipelines/<something>.py`.
@@ -33,26 +33,51 @@ Playlists, scheduling and photo storage are shared by every device.
 Modules in that folder are auto-discovered. Bump `version` whenever the output changes, so cached images are regenerated.
 
 ### Adding a protocol
-Add `server/protocols/<name>.py` with a FastAPI `router` and a `PROTOCOL` name, then list it in `server/protocols/__init__.py`. Use `schedule.choose()` / `schedule.next_wake()` and `prepare.get_prepared()` so the device shares the playlist logic. The planned ESP32 frame needs this: a "next image + sleep N s" endpoint and a pipeline that pre-dithers and packs 4 bpp.
+Add `server/protocols/<name>.py` with a FastAPI `router` and a `PROTOCOL` name, then list it in `server/protocols/__init__.py`. Use `schedule.choose()` / `schedule.next_wake()` and `prepare.get_prepared()` so the device shares the schedule logic. The planned ESP32 frame needs this: a "next image + sleep N s" endpoint and a pipeline that pre-dithers and packs 4 bpp.
 
 ## Web UI
-- **Library** (`/`): upload photos, set crop focal points and per-photo tuning, add photos to a frame's playlist, or "Show next" on a frame.
-- **One tab per frame** (`/frame/<id>`): status, block schedule with a next-24-hours timeline, playlist, wake timing, and the frame's log.
-- **Test card:** see below.
+The main nav is **Sources · Playlists · Frames**, each with sub-tabs. `/` redirects to `/sources/library`.
+
+### Sources
+Sub-tabs: **Library**, one tab per folder source from `devices.yaml` (e.g. **Photobooth**), and **Test cards**.
+- **Library:** web upload, with an optional same-named `.xml` sidecar import (see below).
+- **Each photo card has:**
+  - click the photo to set the crop focal point
+  - **Edit info** (sidecar fields and tags)
+  - per-photo tuning
+  - **Add to playlist ▾**
+  - **Show next on ▾** a frame
+  - **Sim**: opens the photo as the chosen frame would display it. It's per frame because size, strip, captions, rotation and tuning are all per frame.
+  - **Delete**
+- **Tag filter:** each source tab has one.
+
+### Playlists
+- **All playlists:** cards with thumbnails, photo count, and which frames use each one. **New / Rename / Duplicate / Delete**. Delete is refused, with a banner, while any frame's schedule block uses the playlist.
+- **One sub-tab per playlist:** reorder (↑↓), remove, **Show next**, **Sim**.
+- Photos are added from Sources with **Add to playlist**.
+- Playlists aren't owned by frames. Several frames can share one.
+
+### Frames
+One sub-tab per frame (`/frame/<id>`): status, schedule with a next-24-hours timeline, wake timing, and the frame's log.
 
 ## Schedule (daily blocks)
-Each frame has a daily timeline of blocks, edited on its tab. A block starts at a clock time and runs until the next block starts, wrapping past midnight.
+Each frame has a daily timeline of blocks, edited on its tab. A block starts at a clock time and runs until the next block starts, wrapping past midnight. A block is **start time + source + selection + refresh**.
 
-| Block | On a pull the frame gets | Next wake |
-|---|---|---|
-| **Sleep** | a chosen photo, or a random playlist photo (picked once per night) | when the block ends |
-| **Load image** | a chosen photo | when the block ends |
-| **Random image** | a random playlist photo (never the one just shown) | every N min |
-| **Play playlist** | the next playlist photo; the position carries over between blocks | every N min |
+- **Source:** a raw source (`library`, a folder source id such as `photobooth`, or `testcards`) or a playlist (stored as `playlist:<id>`).
+- **Selection:**
+  - **Next:** in order, i.e. playlist order, or arrival order for a raw source. **Each frame keeps its own position per source** (the `source_cursors` table), so frames sharing a playlist don't disturb each other.
+  - **Random:** never the photo currently shown.
+  - **Most recent:** the newest added photo.
+  - **Specific photo.**
+- **Refresh:**
+  - **Every N min** (N ≥ 5): ticks are counted from the block's start (07:00, 08:00, …).
+  - **Blank:** hold one photo until the block ends. The frame doesn't wake until then.
 
-- **Interval alignment:** intervals are counted from the block's start (07:00, 08:00, …).
-- **Playlist:** the frame's photo pool, which Random and Play playlist blocks draw from.
-- **No blocks yet:** the frame follows the `interval_minutes`/`wake_hours` defaults from `devices.yaml`. **Make these editable** turns those defaults into blocks.
+Example: *Photobooth + Most recent every 10 min* is a live party feed.
+
+**Old block kinds** map as: Sleep → hold (+ a specific photo or random), Load image → specific + hold, Random image → random every N, Play playlist → next every N.
+
+**No blocks yet:** the frame follows the `interval_minutes`/`wake_hours` defaults from `devices.yaml`: Library, Next, every interval during `wake_hours`, and one random Library photo held outside them. **Make these editable** turns those defaults into blocks.
 
 Precedence on each pull:
 1. A queued **Show next** photo (one shot).
@@ -98,11 +123,11 @@ Each photo has a metadata sidecar, `originals/<sha>.xml`, in the flat `<meta>` f
 
 **Elements the server doesn't use** (e.g. `prepare_image.py`'s `text_color_*`) are kept as-is when the file is saved.
 
-**In the Library:**
+**On a source tab:**
 - Each photo shows `Title · Location · Film` and `Artist ‡ Date`, plus its tags.
 - **Edit info** changes any field.
 - **↓ xml** downloads the sidecar.
-- The tag bar filters the Library by tag (`/?tag=…`).
+- The tag bar filters the source's photos by tag.
 
 ## Captions
 A frame can have a photo's caption rendered into the image on the server. It uses the same layout as the original EE03 firmware: a left run `Title · Location · Film` and a larger right run `Artist ‡ Date`.
@@ -138,7 +163,7 @@ The UI previews decode the `.bin` back to a PNG.
 The schedule blocks, wake offset and log are the same as for the Bloomin8.
 
 ## Tuning
-These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. The pipeline applies them in this order:
+These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. Per-photo tuning is global to the photo; there's no per-frame or per-playlist photo tuning. The pipeline applies them in this order:
 
 1. **`lift` / `lift_threshold`** (defaults 0 / 90): soft shadow lift. Pixels darker than the threshold (luma 0–255) are raised by up to `lift`, most strongly at black. Spectra 6 tends to crush deep shadows.
 2. **`gamma`:** applied to luma only, so hue and saturation are kept. >1 lightens midtones, <1 darkens.
@@ -153,7 +178,7 @@ The lift formula and luma-gamma approach come from [fwmone/eink-optimize](https:
 A good first test card is A = your current settings, B = that recipe, C = halfway between.
 
 ## Test cards (tuning A/B/C on the real panel)
-Open the **Test card** tab. It renders one image at the frame's resolution, split into three columns (A/B/C), and each column is tuned with its own saturation, contrast, brightness and gamma.
+Open **Sources → Test cards**. It renders one image at the frame's resolution, split into three columns (A/B/C), and each column is tuned with its own saturation, contrast, brightness and gamma.
 
 - **Color card:**
   - Spectra 6 ink swatches
@@ -167,12 +192,58 @@ Open the **Test card** tab. It renders one image at the frame's resolution, spli
   - text sizes
   - shadow and highlight steps
 
-Pure ink swatches barely respond to tuning, so judge the differences on the ramps, tints and pastels. Optionally pick a library photo for a "photo strip": the same crop of it appears in every column.
+Pure ink swatches barely respond to tuning, so judge the differences on the ramps, tints and pastels. Optionally pick a photo for a "photo strip": the same crop of it appears in every column.
 
-- **Save to library** stores the card as a normal photo. It gets neutral per-photo tuning, so the device's tuning isn't applied on top.
-- **Save & show next** also queues the card for the frame's next pull. Any library photo has a **Show next** button too. It's one shot: after that pull the playlist resumes.
+- **Save** stores the card in the **Test cards** source (its own `testcards` source, not the Library). It gets neutral per-photo tuning, so the device's tuning isn't applied on top.
+- **Save & show next** also queues the card for the frame's next pull. Any photo has a **Show next on ▾** menu too. It's one shot: after that pull the schedule resumes.
 - To see it right away, wake the frame and resend its setup (`configure_frame --print-curl`).
 - When you've picked a winner, copy that column's values into `devices.yaml` → `tuning`.
+
+## Sources and the photobooth
+A **source** is a pool of photos. There are three kinds: the Library, Test cards, and folder sources you define in `devices.yaml`. A folder source feeds in photos from outside, e.g. the `esp32-projects/xiao_s3_sense_photobooth` firmware, which uploads to it.
+
+Add a `sources:` list next to `devices:`:
+```yaml
+sources:
+  - id: photobooth            # lowercase letters/digits/_; not library/testcards/playlist
+    name: Photobooth
+    folder: sources/photobooth  # relative to DATA_DIR (/data in Docker); bind-mount elsewhere if wanted
+    upload_token: "<random>"    # enables uploads; generate like other tokens
+    tags: [photobooth]          # added to every new photo's sidecar
+```
+
+**Folder behaviour:**
+- Files are kept human-readable in the folder (e.g. `2026-10-24_19-02-11_A.jpg`), with the `.xml` sidecar beside each as `<name>.xml` (the `prepare_image.py` convention). Library photos stay content-addressed in `originals/`.
+- **Photos arrive two ways:** HTTP upload, or dropping files into the folder (scp, SMB, etc).
+- **Sidecar for a new folder photo:** the EXIF date and artist, plus the source's `tags`. A name like `YYYY-MM-DD_HH-MM-SS_A.jpg` also gives the date and a `shot-a` style tag. A same-named `.xml` already in the folder is used as-is.
+- **Deleting:** a file deleted from the folder is removed from the server (and from playlists) on the next scan. Deleting a folder-source photo in the UI deletes its file too.
+
+**Scanning:** the server scans folder sources at startup, every 60 s, and when you press **Rescan folder** on the source's tab. Set the interval with the `SCAN_INTERVAL` env var in seconds; `0` disables the periodic scan.
+
+**Upload endpoint:** `POST /sources/<id>/upload`, token-authenticated, so it isn't behind the admin password.
+- **Headers:** `X-Access-Token: <upload_token>`, `X-Filename: <name>.jpg`, `Content-Type: image/jpeg`. The body is the raw JPEG, at most 25 MB.
+- **Responses:**
+  - `200 {"status":"stored"|"duplicate","id":N,"name":"stored filename"}`. `duplicate` means the same content is already on the server. A name collision with different content is stored as `name-2.jpg`.
+  - `401` bad token
+  - `400` bad filename or empty body
+  - `413` too large
+  - `422` not an image
+
+```bash
+curl -X POST -H 'X-Access-Token: <token>' -H 'X-Filename: test.jpg' -H 'Content-Type: image/jpeg' --data-binary @test.jpg http://<pi>:8080/sources/photobooth/upload
+```
+
+## Upgrading
+The first start on the new version migrates the database automatically, once (schema version 2, recorded in a `meta` table):
+- each frame's old playlist becomes a playlist named after the frame
+- old blocks are converted to source/selection/hold. Behaviour was checked to be identical, i.e. the same 24 h plan.
+- a frame's old playlist position becomes its cursor
+- frames that were on the `devices.yaml` fallback get explicit blocks on their old playlist
+
+Back up the database first:
+```bash
+cp data/db.sqlite data/db.sqlite.bak
+```
 
 ## Running
 
@@ -220,8 +291,9 @@ Use `--dry-run` to only print the PUT.
 
 ## Data (`DATA_DIR`, `/data` in Docker; git-ignored)
 - `devices.yaml`: device registry. It holds the tokens, so it stays out of git.
-- `db.sqlite`: photos, playlists, device state, and pull history.
-- `originals/` and `thumbs/`: uploads, stored by sha256.
+- `db.sqlite`: photos, playlists, per-frame source positions, device state, and pull history.
+- `originals/` and `thumbs/`: Library uploads, stored by sha256.
+- Folder sources' files (e.g. `sources/photobooth/`), under `DATA_DIR` unless configured otherwise. See below.
 - `cache/<device>/`: prepared images. Each is keyed by source, pipeline + version, geometry, tuning, and focal point.
 
 ## Bloomin8 notes / to verify on hardware

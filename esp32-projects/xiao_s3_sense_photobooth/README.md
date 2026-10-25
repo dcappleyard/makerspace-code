@@ -1,7 +1,7 @@
 # xiao_s3_sense_photobooth
 
 A battery-friendly photo booth on the **XIAO ESP32-S3 Sense** with the **1.28" round touch display**. It's the same hardware as `../xiao_s3_sense_webcam`, and the camera, display and SD code started as a copy of it.
-- **No web server.** WiFi is only used once at boot, to set the clock, and is then switched off. Pushing photos to a Raspberry Pi is planned but not built yet; see [Later: WiFi upload](#later-wifi-upload).
+- **No web server.** WiFi is only brought up briefly: at boot to set the clock, and when going to sleep to upload photos to the `../../python-projects/eink_photo_server` on a Raspberry Pi. See [WiFi upload](#wifi-upload).
 - **Hardware:** see `../hardware_info.md`.
 
 ## How it works
@@ -60,7 +60,7 @@ Photo names need the time. The round display has a **PCF8563 RTC** with a coin c
 
 ## Setup
 
-1. **Optional: copy `include/secrets.h.example` to `include/secrets.h`** and set `WIFI_SSID` / `WIFI_PASSWORD`, so the clock gets set from NTP at boot. It's gitignored, and the build works without it.
+1. **Optional: copy `include/secrets.h.example` to `include/secrets.h`** and set `WIFI_SSID` / `WIFI_PASSWORD`, so the clock gets set from NTP at boot. To also upload photos, set `SERVER_URL` (use an IP, e.g. `http://192.168.30.10:8080`) and `UPLOAD_TOKEN` (the server's `sources:` `photobooth` `upload_token`). It's gitignored, and the build works without it.
 2. **Insert a FAT32 microSD card** in either slot: the Sense board's, or the round display's. The firmware creates `/photos/` itself.
 3. **Set the display's KE switches:** both OFF worked on our unit; see `../hardware_info.md`.
 4. **Flash** from this folder:
@@ -77,7 +77,8 @@ src/booth.{h,cpp}    the state machine: sleep / live / Capture? / countdown, fla
 src/screen.{h,cpp}   round display: panel power, touch, light sleep, sprite-composed frames and overlays
 src/camera.{h,cpp}   esp32-camera init/off, live vs full-size capture modes
 src/storage.{h,cpp}  SD on the display's SPI bus, /photos, RAM fallback, names
-src/rtc_clock.{h,cpp} PCF8563 RTC read/write, one-off NTP sync at boot
+src/rtc_clock.{h,cpp} PCF8563 RTC read/write, NTP sync, wifiUp()/wifiDown()/ntpSyncNow()
+src/upload.{h,cpp}   uploads pending photos to the eink_photo_server at sleep
 src/main.cpp         setup order and loop
 lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round display)
 ```
@@ -86,11 +87,17 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 
 **Camera facing you:** if the camera faces the subject, like a selfie, you may want the live view mirrored. There's no setting for that yet.
 
-## Later: WiFi upload
+## WiFi upload
 
-The plan is to **push** photos to a Raspberry Pi on the network after each sequence, or in batches when awake. Pushing means the booth only needs WiFi briefly, whereas a Pi pulling on a schedule would need the booth awake and reachable.
+When the booth goes to sleep (30 s after the last tap, or immediately on the existing sleep path), the camera is already off and the screen still on. If any photos are pending, it:
+1. Brings WiFi up (the existing 15 s connect timeout).
+2. POSTs each pending photo, oldest first, to `SERVER_URL` + `/sources/photobooth/upload`. The source id is `UPLOAD_SOURCE` in `src/booth_config.h`. Headers are `X-Access-Token` = `UPLOAD_TOKEN` and `X-Filename` = the photo's name. It streams from the SD card, or from PSRAM for shots taken without a card.
+3. Shows "Uploading... n of N", then "Uploaded" / "Upload incomplete", or "Upload later / no WiFi".
 
-The booth already shuts WiFi down after the boot sync, so an upload step would bring it up, send the new photos, and switch it off again. Waiting on the network and Pi-side design.
+- **Accepted photos:** a card photo the server accepted (stored or duplicate) moves to `/photos/uploaded/`. It stays on the card, just out of the way. RAM-only photos are dropped once uploaded.
+- **Retries:** anything not sent is retried at the next sleep. That covers the server being down or refusing (the uploader stops at the first failure) and the per-session budget running out. Constants: `UPLOAD_BUDGET_MS` (60 s per session) and `UPLOAD_HTTP_TIMEOUT_MS` (20 s per photo).
+- **Clock:** while WiFi is up for an upload it also re-syncs NTP and writes the RTC, which fixes drift between reboots. Then WiFi goes off again.
+- **Needs all of** `WIFI_SSID`, `SERVER_URL` and `UPLOAD_TOKEN` in `secrets.h`. Without them upload is compiled out and nothing else changes.
 
 ## Verified vs. unverified
 
@@ -101,7 +108,13 @@ The booth already shuts WiFi down after the boot sync, so an upload step would b
 
 **Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts at 20 MHz, and photos land in `/photos/`.
 
-**Builds:** clean with and without `secrets.h` (16.3% flash without WiFi, 33.5% with).
+**Builds:** clean with and without `secrets.h`. Without it: 16.3% flash. With upload enabled: 37.5% flash (1,254,030 of 3,342,336 bytes) and 19.5% RAM.
+
+**Not yet tested on hardware:** the upload.
+- photos uploading at sleep
+- files moving to `/photos/uploaded/`
+- server down, then a retry at the next sleep
+- no-SD RAM shots uploading
 
 **What's carried over:** these are copied from `../xiao_s3_sense_webcam`, where they work on hardware:
 - the camera

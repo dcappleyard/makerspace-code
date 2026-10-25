@@ -31,8 +31,14 @@ LABELS = {"artist": "Artist", "date": "Date", "location": "Location", "title": "
 _TAG_RE = re.compile(r"<(\w+)>(.*?)</\1>", re.S)
 
 
-def path_for(originals_dir: Path, sha: str) -> Path:
-    return originals_dir / f"{sha}.xml"
+def path_for(photo) -> Path:
+    """originals/<sha>.xml for uploaded photos; <name>.xml beside the file for
+    photos living in a folder source (the prepare_image.py convention)."""
+    from . import config as cfg
+    from . import photos
+    if photo["rel_path"]:
+        return (cfg.DATA_DIR / photo["rel_path"]).with_suffix(".xml")
+    return photos.originals_dir() / f"{photo['sha']}.xml"
 
 
 def normalize_tags(tags) -> list[str]:
@@ -109,15 +115,10 @@ def caption_fields(meta: dict) -> dict:
 
 # --- storage ---------------------------------------------------------------
 
-def _originals() -> Path:
-    from . import photos
-    return photos.originals_dir()
-
-
 def read(photo) -> dict:
     """The photo's sidecar, created from EXIF if it doesn't exist yet."""
     from . import photos
-    path = path_for(_originals(), photo["sha"])
+    path = path_for(photo)
     if path.exists():
         return parse(path.read_bytes())
     meta = from_exif(photos.original_path(photo))
@@ -128,7 +129,7 @@ def read(photo) -> dict:
 def write(photo, meta: dict) -> dict:
     meta = {**{f: "" for f in FIELDS}, "tags": [], "extra": {}, **meta}
     meta["tags"] = normalize_tags(meta["tags"])
-    path = path_for(_originals(), photo["sha"])
+    path = path_for(photo)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".xml.tmp")
     tmp.write_text(render(meta), encoding="utf-8")

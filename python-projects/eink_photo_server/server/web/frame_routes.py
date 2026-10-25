@@ -6,11 +6,11 @@ import io
 import json
 import statistics
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import Response
 
 from .. import config as cfg
-from .. import db, pipelines, schedule
+from .. import db, pipelines, schedule, sources
 from .common import FormError, back, device_or_404, require_admin, templates
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -45,10 +45,13 @@ def _events(conn, device_id: str, limit: int | None = LOG_ROWS) -> list[dict]:
 def frames_page(request: Request):
     with db.tx() as conn:
         photo_by_id = {p["id"]: p for p in conn.execute("SELECT * FROM photos")}
-        frames = [{"dev": d, "state": db.state(conn, d.id), "playlist_n": len(db.playlist(conn, d.id))}
-                  for d in cfg.config.devices.values()]
+        frames = []
+        for d in cfg.config.devices.values():
+            blocks = schedule.get_blocks(conn, d)
+            used = sorted({sources.label(conn, b.source) for b in blocks if b.selection != "specific"})
+            frames.append({"dev": d, "state": db.state(conn, d.id), "sources_used": used})
     return templates.TemplateResponse(request, "frames.html", {
-        "page": "frames", "frames": frames, "photo_by_id": photo_by_id,
+        "section": "frames", "page": "frames", "frames": frames, "photo_by_id": photo_by_id,
         "tz": str(cfg.config.tz), "pipelines": pipelines.names(),
     })
 
@@ -62,12 +65,14 @@ def frame_page(request: Request, device_id: str):
         photos = conn.execute("SELECT * FROM photos ORDER BY id DESC").fetchall()
         blocks = schedule.get_blocks(conn, dev)
         ctx = {
+            "section": "frames",
             "page": dev.id,
             "dev": dev,
             "state": st,
             "photos": photos,
             "photo_by_id": {p["id"]: p for p in photos},
-            "playlist": db.playlist(conn, dev.id),
+            "source_choices": sources.choices(conn),
+            "block_text": {b.key: b.describe(conn) for b in blocks},
             "blocks": blocks,
             "using_fallback": bool(blocks) and blocks[0].from_yaml,
             "current": schedule.current(blocks, now),
@@ -75,8 +80,7 @@ def frame_page(request: Request, device_id: str):
             "events": _events(conn, dev.id),
             "drift": drift_stats(conn, dev.id),
             "params": {**pipelines.get(dev.pipeline).default_params, **dev.tuning},
-            "kinds": schedule.KINDS,
-            "interval_kinds": schedule.INTERVAL_KINDS,
+            "selections": schedule.SELECTIONS,
         }
     return templates.TemplateResponse(request, "frame.html", ctx)
 
@@ -92,17 +96,6 @@ def device_pause(request: Request, device_id: str):
     return back(request)
 
 
-@router.post("/ui/device/{device_id}/add")
-def device_add(request: Request, device_id: str, photo_id: int = Form(...)):
-    device_or_404(device_id)
-    with db.tx() as conn:
-        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE device_id = ?",
-                           (device_id,)).fetchone()[0]
-        conn.execute("INSERT INTO playlist_items (device_id, photo_id, position) VALUES (?,?,?)",
-                     (device_id, photo_id, pos))
-    return back(request)
-
-
 @router.post("/ui/device/{device_id}/queue")
 def device_queue(request: Request, device_id: str, photo_id: int | None = Form(None)):
     """Serve this photo on the device's next pull (one shot). Empty photo_id clears it."""
@@ -113,77 +106,64 @@ def device_queue(request: Request, device_id: str, photo_id: int | None = Form(N
     return back(request)
 
 
-@router.post("/ui/item/{item_id}/move")
-def item_move(request: Request, item_id: int, direction: str = Form(...)):
-    with db.tx() as conn:
-        it = conn.execute("SELECT * FROM playlist_items WHERE id = ?", (item_id,)).fetchone()
-        if not it:
-            raise HTTPException(404)
-        ids = [i["id"] for i in db.playlist(conn, it["device_id"])]
-        i = ids.index(item_id)
-        j = i - 1 if direction == "up" else i + 1
-        if 0 <= j < len(ids):
-            ids[i], ids[j] = ids[j], ids[i]
-        for pos, iid in enumerate(ids):
-            conn.execute("UPDATE playlist_items SET position = ? WHERE id = ?", (pos, iid))
-    return back(request)
-
-
-@router.post("/ui/item/{item_id}/remove")
-def item_remove(request: Request, item_id: int):
-    with db.tx() as conn:
-        conn.execute("DELETE FROM playlist_items WHERE id = ?", (item_id,))
-    return back(request)
-
-
 # --- schedule blocks --------------------------------------------------------
 
-def _block_fields(conn, device_id, start: str, kind: str, interval: str, photo_id: str,
+def _block_fields(conn, device_id, start: str, source: str, selection: str, interval: str, photo_id: str,
                   exclude_id: int | None = None) -> tuple:
+    """Validated (start, source, selection, interval or None, photo_id, hold)."""
     try:
         start_t = cfg.parse_hhmm(start)
     except (ValueError, AttributeError):
         raise FormError("start time must be HH:MM")
-    if kind not in schedule.KINDS:
-        raise FormError("unknown block type")
+    if selection not in schedule.SELECTIONS:
+        raise FormError("unknown selection")
+    pid = None
+    if selection == "specific":
+        pid = int(photo_id) if photo_id else None
+        if not pid or not db.photo(conn, pid):
+            raise FormError("pick the photo to show")
+        source = source or "library"
+    elif source not in dict(sources.choices(conn)):
+        raise FormError("pick a source")
     iv = None
-    if kind in schedule.INTERVAL_KINDS:
+    if interval.strip():
         try:
             iv = int(interval)
         except ValueError:
-            raise FormError("interval (minutes) is required for this block type")
+            raise FormError("every N minutes must be a whole number (leave it blank to hold)")
         if iv < MIN_INTERVAL:
-            raise FormError(f"interval must be at least {MIN_INTERVAL} minutes")
-    pid = int(photo_id) if photo_id and kind in ("sleep", "image") else None
-    if kind == "image" and not pid:
-        raise FormError("pick the image to load")
+            raise FormError(f"every N minutes must be at least {MIN_INTERVAL}")
     start_s = f"{start_t:%H:%M}"
     clash = conn.execute("SELECT id FROM schedule_blocks WHERE device_id = ? AND start_time = ? AND id IS NOT ?",
                          (device_id, start_s, exclude_id)).fetchone()
     if clash:
         raise FormError(f"another block already starts at {start_s}")
-    return start_s, kind, iv, pid
+    return start_s, source, selection, iv, pid, int(iv is None)
+
+
+_BLOCK_COLS = "start_time, source, selection, interval_minutes, photo_id, hold"
 
 
 @router.post("/frame/{device_id}/blocks/add")
-def block_add(request: Request, device_id: str, start: str = Form(...), kind: str = Form(...),
-              interval: str = Form(""), photo_id: str = Form("")):
+def block_add(request: Request, device_id: str, start: str = Form(...), source: str = Form(""),
+              selection: str = Form(...), interval: str = Form(""), photo_id: str = Form("")):
     device_or_404(device_id)
     with db.tx() as conn:
-        fields = _block_fields(conn, device_id, start, kind, interval, photo_id)
-        conn.execute("INSERT INTO schedule_blocks (device_id, start_time, kind, interval_minutes, photo_id) "
-                     "VALUES (?,?,?,?,?)", (device_id, *fields))
+        f = _block_fields(conn, device_id, start, source, selection, interval, photo_id)
+        conn.execute(f"INSERT INTO schedule_blocks (device_id, kind, {_BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?)",
+                     (device_id, f[2], *f))
     return back(request)
 
 
 @router.post("/frame/{device_id}/blocks/{block_id}/update")
-def block_update(request: Request, device_id: str, block_id: int, start: str = Form(...), kind: str = Form(...),
-                 interval: str = Form(""), photo_id: str = Form("")):
+def block_update(request: Request, device_id: str, block_id: int, start: str = Form(...), source: str = Form(""),
+                 selection: str = Form(...), interval: str = Form(""), photo_id: str = Form("")):
     device_or_404(device_id)
     with db.tx() as conn:
-        fields = _block_fields(conn, device_id, start, kind, interval, photo_id, exclude_id=block_id)
-        conn.execute("UPDATE schedule_blocks SET start_time = ?, kind = ?, interval_minutes = ?, photo_id = ? "
-                     "WHERE id = ? AND device_id = ?", (*fields, block_id, device_id))
+        f = _block_fields(conn, device_id, start, source, selection, interval, photo_id, exclude_id=block_id)
+        conn.execute("UPDATE schedule_blocks SET kind = ?, start_time = ?, source = ?, selection = ?, "
+                     "interval_minutes = ?, photo_id = ?, hold = ? WHERE id = ? AND device_id = ?",
+                     (f[2], *f, block_id, device_id))
     return back(request)
 
 
@@ -201,8 +181,9 @@ def blocks_from_defaults(request: Request, device_id: str):
     with db.tx() as conn:
         if not conn.execute("SELECT 1 FROM schedule_blocks WHERE device_id = ?", (dev.id,)).fetchone():
             for b in schedule.fallback_blocks(dev):
-                conn.execute("INSERT INTO schedule_blocks (device_id, start_time, kind, interval_minutes, photo_id) "
-                             "VALUES (?,?,?,?,?)", (dev.id, f"{b.start:%H:%M}", b.kind, b.interval, b.photo_id))
+                conn.execute(f"INSERT INTO schedule_blocks (device_id, kind, {_BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?)",
+                             (dev.id, b.selection, f"{b.start:%H:%M}", b.source, b.selection, b.interval,
+                              b.photo_id, int(b.hold)))
     return back(request)
 
 

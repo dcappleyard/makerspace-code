@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playlists · eInk Photo Server</title>
+{% include "_style.html" %}
+<style> .thumbs { display:flex; gap:4px; margin:6px 0; min-height:48px; } .thumbs img { height:48px; border-radius:3px; } </style>
+</head>
+<body>
+{% include "_nav.html" %}
+<div class="card">
+  <form method="post" action="/ui/playlists/new" class="row">
+    <input name="name" placeholder="New playlist name" required> <button>New playlist</button>
+  </form>
+  <p class="muted">Playlists are ordered picks from any source. Frames use them through their schedule blocks
+    (source = the playlist); several frames can share one, each keeping its own place in it.</p>
+</div>
+<div class="grid">
+{% for c in cards %}{% set pl = c.pl %}
+  <div class="card">
+    <h3><a href="/playlist/{{ pl.id }}">{{ pl.name }}</a></h3>
+    <div class="thumbs">{% for pid in c.thumbs %}<img src="/ui/thumb/{{ pid }}" alt="">{% endfor %}</div>
+    <div class="muted">{{ c.count }} photo{{ "s" if c.count != 1 }}</div>
+    <div class="muted">Used by: {% for d in c.users %}<a href="/frame/{{ d.id }}">{{ d.name }}</a>{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</div>
+    <div class="row" style="margin-top:6px">
+      <form method="post" action="/ui/playlist/{{ pl.id }}/rename" class="row">
+        <input name="name" value="{{ pl.name }}" style="width:10em"> <button>Rename</button></form>
+      <form method="post" action="/ui/playlist/{{ pl.id }}/duplicate"><button>Duplicate</button></form>
+      <form method="post" action="/ui/playlist/{{ pl.id }}/delete" onsubmit="return confirm('Delete playlist {{ pl.name|e }}?')"><button>Delete</button></form>
+    </div>
+  </div>
+{% else %}<p class="muted">No playlists yet.</p>{% endfor %}
+</div>
+</body>
+</html>

@@ -5,6 +5,7 @@ Runtime state (battery, playlist cursor, last image, ...) lives in SQLite, not h
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
@@ -94,9 +95,37 @@ class Device:
 
 
 @dataclass
+class FolderSource:
+    """A photo source backed by a folder under DATA_DIR (e.g. the photobooth's
+    repository), filled by HTTP upload (upload_token) and/or by dropping files in."""
+    id: str
+    name: str
+    folder: str                 # relative to DATA_DIR
+    upload_token: str = ""
+    tags: list = field(default_factory=list)
+
+    @property
+    def path(self) -> Path:
+        return DATA_DIR / self.folder
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FolderSource:
+        sid = str(d["id"])
+        if not re.fullmatch(r"[a-z0-9_]+", sid) or sid in RESERVED_SOURCE_IDS:
+            raise ValueError(f"source id {sid!r}: use lowercase letters, digits and _ "
+                             f"(not {', '.join(RESERVED_SOURCE_IDS)})")
+        return cls(id=sid, name=d.get("name", sid), folder=str(d.get("folder", f"sources/{sid}")),
+                   upload_token=str(d.get("upload_token") or ""), tags=list(d.get("tags") or []))
+
+
+RESERVED_SOURCE_IDS = ("library", "testcards", "playlist")
+
+
+@dataclass
 class Config:
     tz: ZoneInfo
     devices: dict[str, Device]
+    sources: dict[str, FolderSource] = field(default_factory=dict)
 
     def by_secret(self, secret: str) -> Device | None:
         return next((d for d in self.devices.values() if d.image_secret == secret), None)
@@ -110,7 +139,11 @@ def load() -> Config:
     for d in raw.get("devices") or []:
         dev = Device.from_dict(d)
         devices[dev.id] = dev
-    return Config(tz=tz, devices=devices)
+    sources = {}
+    for d in raw.get("sources") or []:
+        src = FolderSource.from_dict(d)
+        sources[src.id] = src
+    return Config(tz=tz, devices=devices, sources=sources)
 
 
 config = load()
@@ -119,5 +152,5 @@ config = load()
 def reload() -> Config:
     global config
     new = load()
-    config.tz, config.devices = new.tz, new.devices
+    config.tz, config.devices, config.sources = new.tz, new.devices, new.sources
     return config

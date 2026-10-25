@@ -8,6 +8,7 @@
 #include <algorithm>
 
 const char *PHOTO_DIR = "/photos";
+const char *UPLOADED_DIR = "/photos/uploaded";
 
 namespace
 {
@@ -22,14 +23,14 @@ struct RamPhoto
     uint8_t *data; // ps_malloc'd
     size_t len;
 };
-std::vector<RamPhoto> ramPhotos; // oldest first
+std::vector<RamPhoto> ramStore; // oldest first
 size_t ramBytes = 0;
 
 String sdPath(const String &name) { return String(PHOTO_DIR) + "/" + name; }
 
 RamPhoto *findRam(const String &name)
 {
-    for (RamPhoto &p : ramPhotos)
+    for (RamPhoto &p : ramStore)
     {
         if (p.name == name)
             return &p;
@@ -44,10 +45,10 @@ bool nameTaken(const String &name)
 
 void dropOldestRam()
 {
-    free(ramPhotos.front().data);
-    ramBytes -= ramPhotos.front().len;
-    Serial.printf("RAM store full -- dropped %s\n", ramPhotos.front().name.c_str());
-    ramPhotos.erase(ramPhotos.begin());
+    free(ramStore.front().data);
+    ramBytes -= ramStore.front().len;
+    Serial.printf("RAM store full -- dropped %s\n", ramStore.front().name.c_str());
+    ramStore.erase(ramStore.begin());
 }
 
 } // namespace
@@ -102,9 +103,9 @@ bool writeSd(const String &name, const uint8_t *data, size_t len)
 size_t flushRamToSd()
 {
     size_t moved = 0;
-    while (!ramPhotos.empty())
+    while (!ramStore.empty())
     {
-        RamPhoto &p = ramPhotos.front();
+        RamPhoto &p = ramStore.front();
         // The name was unique when taken, but the card may already hold one
         // like it (e.g. a nodate_ name from an earlier boot).
         String name = SD.exists(sdPath(p.name)) ? uniqueName(p.name.substring(0, p.name.length() - 4)) : p.name;
@@ -115,7 +116,7 @@ size_t flushRamToSd()
         }
         free(p.data);
         ramBytes -= p.len;
-        ramPhotos.erase(ramPhotos.begin());
+        ramStore.erase(ramStore.begin());
         moved++;
     }
     return moved;
@@ -229,17 +230,74 @@ SaveResult savePhoto(const uint8_t *data, size_t len, const String &base)
     }
     if (len > RAM_PHOTOS_MAX_BYTES)
         return r;
-    while (!ramPhotos.empty() && (ramPhotos.size() >= RAM_PHOTOS_MAX || ramBytes + len > RAM_PHOTOS_MAX_BYTES))
+    while (!ramStore.empty() && (ramStore.size() >= RAM_PHOTOS_MAX || ramBytes + len > RAM_PHOTOS_MAX_BYTES))
         dropOldestRam();
     uint8_t *copy = (uint8_t *)ps_malloc(len);
     if (!copy)
         return r;
     memcpy(copy, data, len);
-    ramPhotos.push_back({r.name, copy, len});
+    ramStore.push_back({r.name, copy, len});
     ramBytes += len;
     r.ok = true;
     return r;
 }
 
-size_t ramPhotoCount() { return ramPhotos.size(); }
+size_t ramPhotoCount() { return ramStore.size(); }
 size_t ramPhotoBytes() { return ramBytes; }
+
+std::vector<String> pendingSdPhotos()
+{
+    std::vector<String> names;
+    if (!mounted)
+        return names;
+    File dir = SD.open(PHOTO_DIR);
+    if (!dir || !dir.isDirectory())
+        return names;
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile())
+    {
+        String name = f.name();
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0)
+            name = name.substring(slash + 1);
+        if (!f.isDirectory() && !name.startsWith(".") && name.endsWith(".jpg"))
+            names.push_back(name);
+        f.close();
+    }
+    dir.close();
+    std::sort(names.begin(), names.end()); // timestamped names: oldest first
+    return names;
+}
+
+bool markSdUploaded(const String &name)
+{
+    if (!mounted)
+        return false;
+    if (!SD.exists(UPLOADED_DIR) && !SD.mkdir(UPLOADED_DIR))
+        return false;
+    String to = String(UPLOADED_DIR) + "/" + name;
+    if (SD.exists(to))
+        SD.remove(to);
+    return SD.rename(sdPath(name), to);
+}
+
+std::vector<RamPhotoRef> ramPhotos()
+{
+    std::vector<RamPhotoRef> out;
+    for (const RamPhoto &p : ramStore)
+        out.push_back({p.name, p.data, p.len});
+    return out;
+}
+
+void dropRamPhoto(const String &name)
+{
+    for (size_t i = 0; i < ramStore.size(); i++)
+    {
+        if (ramStore[i].name == name)
+        {
+            free(ramStore[i].data);
+            ramBytes -= ramStore[i].len;
+            ramStore.erase(ramStore.begin() + i);
+            return;
+        }
+    }
+}

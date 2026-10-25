@@ -23,7 +23,7 @@
     <div>Last pull: {{ st.last_pull_at|local }}</div>
     <div>Next wake: {{ st.next_target|local }}</div>
     {% if st.battery is not none %}<div>Battery: {{ st.battery }}%</div>{% endif %}
-    <div class="muted">{{ f.playlist_n }} photo{{ "s" if f.playlist_n != 1 }} in playlist</div>
+    <div class="muted">Draws on: {{ f.sources_used|join(", ") or "specific photos only" }}</div>
   </div>
 {% endfor %}
 </div>

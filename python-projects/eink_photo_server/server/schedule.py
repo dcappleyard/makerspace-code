@@ -1,16 +1,19 @@
 """Daily block schedule: what a frame shows on a pull, and when it should wake next.
 
 Each device has a timeline of blocks. A block starts at a local clock time and
-runs until the next block starts, wrapping past midnight:
+runs until the next block starts, wrapping past midnight. A block is:
 
-  sleep     show one photo (fixed, or random from the playlist) until the block ends
-  image     show one fixed photo until the block ends
-  random    a random playlist photo every `interval` minutes
-  playlist  the next playlist photo every `interval` minutes
+  source     where photos come from: a raw source (library, a folder source
+             like the photobooth, testcards) or a playlist (playlist:<id>)
+  selection  random    any photo but the one showing
+             newest    the most recently added
+             next      the next in order (each frame keeps its own position)
+             specific  one chosen photo
+  refresh    every N minutes (ticks aligned to the block's start: 07:00,
+             08:00, ...), or hold one photo until the block ends
 
-Interval ticks are aligned to the block's start (07:00, 08:00, ...). Devices
-without blocks get a fallback built from devices.yaml (interval_minutes +
-wake_hours). Protocol-agnostic: callers add the device's wake offset.
+Devices without blocks get a fallback built from devices.yaml (interval_minutes
++ wake_hours). Protocol-agnostic: callers add the device's wake offset.
 """
 from __future__ import annotations
 
@@ -19,15 +22,14 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 
 from . import config as cfg
-from . import db
+from . import db, sources
 
-KINDS = {
-    "sleep": "Sleep",
-    "image": "Load image",
-    "random": "Random image",
-    "playlist": "Play playlist",
+SELECTIONS = {
+    "next": "Next",
+    "random": "Random",
+    "newest": "Most recent",
+    "specific": "Specific photo",
 }
-INTERVAL_KINDS = ("random", "playlist")
 # A pull this close before a block starts counts as belonging to that block
 # (frames wake a little early).
 BOUNDARY_GRACE = timedelta(minutes=5)
@@ -42,12 +44,26 @@ RETRY_GUARD = timedelta(minutes=5)
 
 @dataclass(frozen=True)
 class Block:
-    key: str                 # stable id: db row id, or "yaml:<kind>" for the fallback
+    key: str                 # stable id: db row id, or "yaml:<n>" for the fallback
     start: time
-    kind: str
-    interval: int | None     # minutes, for random/playlist
-    photo_id: int | None     # image: required; sleep: None = random from playlist
+    source: str              # library | <folder id> | testcards | playlist:<id>
+    selection: str           # next | random | newest | specific
+    interval: int | None     # minutes between photos; None = hold until the block ends
+    photo_id: int | None     # for selection == specific
     from_yaml: bool = False
+
+    @property
+    def hold(self) -> bool:
+        return not self.interval
+
+    def describe(self, conn) -> str:
+        what = SELECTIONS.get(self.selection, self.selection)
+        if self.selection == "specific":
+            p = db.photo(conn, self.photo_id) if self.photo_id else None
+            what = p["filename"] if p else "— (photo missing)"
+        else:
+            what = f"{what} · {sources.label(conn, self.source)}"
+        return what + (" · hold" if self.hold else f" · every {self.interval} min")
 
 
 @dataclass(frozen=True)
@@ -85,19 +101,20 @@ def get_blocks(conn, device) -> list[Block]:
     rows = conn.execute("SELECT * FROM schedule_blocks WHERE device_id = ? ORDER BY start_time, id",
                         (device.id,)).fetchall()
     if rows:
-        return [Block(str(r["id"]), cfg.parse_hhmm(r["start_time"]), r["kind"],
-                      r["interval_minutes"], r["photo_id"]) for r in rows]
+        return [Block(str(r["id"]), cfg.parse_hhmm(r["start_time"]), r["source"] or "library",
+                      r["selection"] or "next", None if r["hold"] else r["interval_minutes"],
+                      r["photo_id"]) for r in rows]
     return fallback_blocks(device)
 
 
 def fallback_blocks(device) -> list[Block]:
-    """The old behaviour, from devices.yaml: playlist every interval_minutes
-    during wake_hours, sleep (random photo) outside them."""
-    play = Block("yaml:playlist", device.wake_start or time(0, 0), "playlist",
-                 device.interval_minutes, None, from_yaml=True)
+    """For a frame with no blocks yet, from devices.yaml: the Library in order
+    every interval_minutes during wake_hours, and one random photo held outside them."""
+    day = Block("yaml:1", device.wake_start or time(0, 0), "library", "next",
+                device.interval_minutes, None, from_yaml=True)
     if device.wake_start and device.wake_end:
-        return [play, Block("yaml:sleep", device.wake_end, "sleep", None, None, from_yaml=True)]
-    return [play]
+        return [day, Block("yaml:2", device.wake_end, "library", "random", None, None, from_yaml=True)]
+    return [day]
 
 
 def occurrence_at(blocks: list[Block], local: datetime) -> Occurrence:
@@ -125,7 +142,7 @@ def target_after(blocks, now: datetime) -> datetime:
     occ = current(blocks, now)
     local_now = now.astimezone(cfg.config.tz)
     target = occ.end
-    if occ.block.kind in INTERVAL_KINDS and occ.block.interval:
+    if not occ.block.hold:
         step = timedelta(minutes=occ.block.interval)
         k = max(1, -(-(local_now + MIN_GAP - occ.start) // step))  # ceil
         target = min(occ.start + k * step, occ.end)
@@ -137,21 +154,42 @@ def target_after(blocks, now: datetime) -> datetime:
 # --- choosing what to show --------------------------------------------------
 
 def _random_pick(items, exclude: int | None, rng=random) -> int | None:
-    ids = [it["photo_id"] for it in items]
+    ids = [it.photo_id for it in items]
     if not ids:
         return None
     choices = [i for i in ids if i != exclude] or ids
     return rng.choice(choices)
 
 
-def _next_in_playlist(items, cursor) -> tuple[object, int] | None:
-    """(item, index) after `cursor` (a playlist_item id), wrapping."""
+def _next_after(items, cursor):
+    """The item after `cursor` (an Item.key), wrapping; the first if not found."""
     if not items:
         return None
-    ids = [it["id"] for it in items]
-    i = ids.index(cursor) + 1 if cursor in ids else 0
-    i %= len(items)
-    return items[i], i
+    keys = [it.key for it in items]
+    return items[(keys.index(cursor) + 1) % len(items)] if cursor in keys else items[0]
+
+
+def _cursor(conn, device_id: str, source: str):
+    row = conn.execute("SELECT last_item FROM source_cursors WHERE device_id = ? AND source = ?",
+                       (device_id, source)).fetchone()
+    return row["last_item"] if row else None
+
+
+def _pick(conn, device, b: Block, last_photo_id: int | None) -> tuple[int | None, str]:
+    """Apply a block's selection to its source; advances the frame's cursor for 'next'."""
+    if b.selection == "specific":
+        return (b.photo_id if b.photo_id and db.photo(conn, b.photo_id) else None), "photo missing"
+    items = sources.items(conn, b.source)
+    if not items:
+        return None, "source empty"
+    if b.selection == "newest":
+        return max(items, key=lambda it: it.photo_id).photo_id, ""
+    if b.selection == "random":
+        return _random_pick(items, last_photo_id), ""
+    item = _next_after(items, _cursor(conn, device.id, b.source))
+    conn.execute("INSERT OR REPLACE INTO source_cursors (device_id, source, last_item) VALUES (?, ?, ?)",
+                 (device.id, b.source, item.key))
+    return item.photo_id, ""
 
 
 def effective_time(now: datetime, prev_target: datetime | None, scheduled: bool) -> datetime:
@@ -185,34 +223,18 @@ def choose(conn, device, now: datetime, at: datetime | None = None) -> tuple[int
 
     occ = current(get_blocks(conn, device), at)
     b = occ.block
-    label = f"{KINDS[b.kind]} {b.start:%H:%M}"
-    items = db.playlist(conn, device.id)
+    label = f"{b.start:%H:%M} {SELECTIONS.get(b.selection, b.selection)} · {sources.label(conn, b.source)}"
 
-    if b.kind in ("sleep", "image"):
+    if b.hold:
         held = st["block_photo_id"]
         if st["block_instance"] == occ.instance and held and db.photo(conn, held):
             return held, f"{label} (holding)"
-        if b.photo_id:
-            pick = b.photo_id if db.photo(conn, b.photo_id) else None
-        elif b.kind == "sleep":
-            pick = _random_pick(items, st["last_photo_id"])
-        else:
-            pick = None
-        if pick is None:
-            return None, f"{label}: no photo"
-        conn.execute("UPDATE device_state SET block_instance = ?, block_photo_id = ? WHERE device_id = ?",
-                     (occ.instance, pick, device.id))
-        return pick, label
-
-    if not items:
-        return None, f"{label}: playlist empty"
-    conn.execute("UPDATE device_state SET block_instance = ?, block_photo_id = NULL WHERE device_id = ?",
-                 (occ.instance, device.id))
-    if b.kind == "random":
-        return _random_pick(items, st["last_photo_id"]), label
-    item, _ = _next_in_playlist(items, st["cursor"])
-    conn.execute("UPDATE device_state SET cursor = ? WHERE device_id = ?", (item["id"], device.id))
-    return item["photo_id"], label
+    pick, why = _pick(conn, device, b, st["last_photo_id"])
+    if pick is None:
+        return None, f"{label}: {why}"
+    conn.execute("UPDATE device_state SET block_instance = ?, block_photo_id = ? WHERE device_id = ?",
+                 (occ.instance, pick if b.hold else None, device.id))
+    return pick, label
 
 
 def next_target(conn, device, now: datetime) -> datetime:
@@ -225,10 +247,8 @@ def plan_day(conn, device, now: datetime, hours: int = 24) -> list[dict]:
     """Simulate the next `hours` of wake targets without touching state.
     Returns [{"at": local datetime, "block": Block, "shows": str}, ...]."""
     blocks = get_blocks(conn, device)
-    items = db.playlist(conn, device.id)
-    st = db.state(conn, device.id)
     names = {r["id"]: r["filename"] for r in conn.execute("SELECT id, filename FROM photos")}
-    cursor = st["cursor"]
+    cursors, item_cache = {}, {}
     end = now + timedelta(hours=hours)
     t, out = now, []
     while True:
@@ -237,20 +257,22 @@ def plan_day(conn, device, now: datetime, hours: int = 24) -> list[dict]:
             break
         occ = current(blocks, t)
         b = occ.block
-        if b.kind == "playlist":
-            nxt = _next_in_playlist(items, cursor)
-            if nxt:
-                cursor = nxt[0]["id"]
-                shows = names.get(nxt[0]["photo_id"], "?")
-            else:
-                shows = "— (playlist empty)"
-        elif b.kind == "random":
-            shows = "random from playlist"
-        elif b.photo_id:
+        src = sources.label(conn, b.source)
+        if b.selection == "specific":
             shows = names.get(b.photo_id, "— (photo missing)")
+        elif b.selection == "next":
+            if b.source not in item_cache:
+                item_cache[b.source] = sources.items(conn, b.source)
+                cursors[b.source] = _cursor(conn, device.id, b.source)
+            item = _next_after(item_cache[b.source], cursors[b.source])
+            if item:
+                cursors[b.source] = item.key
+                shows = f"{names.get(item.photo_id, '?')} ({src})"
+            else:
+                shows = f"— ({src} is empty)"
         else:
-            shows = "random from playlist"
-        if b.kind in ("sleep", "image"):
+            shows = f"{SELECTIONS[b.selection].lower()} from {src}"
+        if b.hold:
             shows += f" until {occ.end:%H:%M}"
         out.append({"at": t.astimezone(cfg.config.tz), "block": b, "shows": shows})
         if len(out) > 500:

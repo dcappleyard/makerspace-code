@@ -1,7 +1,8 @@
-"""Admin UI: the library (upload, photos, add to frame) and the test card page.
+"""Admin UI: the Sources section -- one page per raw source (Library, folder
+sources such as the Photobooth, Test cards) plus the photo actions they share.
 
-Frame pages live in frame_routes.py. Every action is a form POST that
-redirects back to the page it came from.
+Playlists and frames live in playlist_routes.py / frame_routes.py. Every action
+is a form POST that redirects back to the page it came from.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .. import config as cfg
-from .. import db, photos, pipelines, prepare, sidecar, testcards
+from .. import db, photos, pipelines, prepare, sidecar, sources, testcards
 from ..pipelines.base import NEUTRAL_TUNING, TUNING_KEYS, load_oriented
 from .common import back, device_or_404, require_admin, templates
 
@@ -23,35 +24,73 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.get("/")
-def index(request: Request, tag: str = ""):
+def index():
+    return RedirectResponse("/sources/library", status_code=303)
+
+
+def grid_context(conn, rows) -> dict:
+    """What _photo_grid.html needs for a list of photo rows."""
+    in_playlists = {}
+    for r in conn.execute("SELECT DISTINCT i.photo_id, p.id, p.name FROM playlist_items i "
+                          "JOIN playlists p ON p.id = i.playlist_id"):
+        in_playlists.setdefault(r["photo_id"], []).append((r["id"], r["name"]))
+    return {
+        "photos": rows,
+        "metas": {p["id"]: sidecar.read(p) for p in rows},
+        "in_playlists": in_playlists,
+        "devices": list(cfg.config.devices.values()),
+        "all_playlists": conn.execute("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE").fetchall(),
+        "fields": sidecar.FIELDS,
+        "labels": sidecar.LABELS,
+        "tuning_keys": TUNING_KEYS,
+        "json": json,
+    }
+
+
+@router.get("/sources/{key}")
+def source_page(request: Request, key: str, tag: str = ""):
+    if key == "testcards":
+        return testcard_page(request)
+    if not sources.is_raw(key):
+        raise HTTPException(404, "unknown source")
     tag = " ".join(tag.split()).lower()
     with db.tx() as conn:
         if tag:
-            all_photos = conn.execute(
-                "SELECT p.* FROM photos p JOIN photo_tags t ON t.photo_id = p.id WHERE t.tag = ? ORDER BY p.id DESC",
-                (tag,)).fetchall()
+            rows = conn.execute(
+                "SELECT p.* FROM photos p JOIN photo_tags t ON t.photo_id = p.id "
+                "WHERE p.source = ? AND t.tag = ? ORDER BY p.id DESC", (key, tag)).fetchall()
         else:
-            all_photos = conn.execute("SELECT * FROM photos ORDER BY id DESC").fetchall()
-        tag_counts = conn.execute("SELECT tag, COUNT(*) AS n FROM photo_tags GROUP BY tag ORDER BY tag").fetchall()
-        in_playlists = {}
-        for r in conn.execute("SELECT DISTINCT device_id, photo_id FROM playlist_items"):
-            in_playlists.setdefault(r["photo_id"], []).append(r["device_id"])
-    metas = {p["id"]: sidecar.read(p) for p in all_photos}
-    return templates.TemplateResponse(request, "index.html", {
-        "page": "home",
-        "devices": list(cfg.config.devices.values()),
-        "photos": all_photos,
-        "metas": metas,
-        "fields": sidecar.FIELDS,
-        "labels": sidecar.LABELS,
-        "tag": tag,
-        "tag_counts": tag_counts,
-        "in_playlists": in_playlists,
-        "tz": str(cfg.config.tz),
-        "pipelines": pipelines.names(),
-        "tuning_keys": TUNING_KEYS,
-        "json": json,
+            rows = conn.execute("SELECT * FROM photos WHERE source = ? ORDER BY id DESC", (key,)).fetchall()
+        tag_counts = conn.execute(
+            "SELECT t.tag, COUNT(*) AS n FROM photo_tags t JOIN photos p ON p.id = t.photo_id "
+            "WHERE p.source = ? GROUP BY t.tag ORDER BY t.tag", (key,)).fetchall()
+        ctx = grid_context(conn, rows)
+    folder = cfg.config.sources.get(key)
+    scanned = sources.last_scan.get(key)
+    base = cfg.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
+    return templates.TemplateResponse(request, "source.html", {
+        **ctx, "section": "sources", "page": key, "source_key": key,
+        "source_name": sources.label(None, key) if key in sources.BUILTIN else folder.name,
+        "folder": folder, "folder_path": str(folder.path) if folder else None,
+        "upload_url": f"{base}/sources/{key}/upload" if folder else None,
+        "last_scan": datetime.fromtimestamp(scanned, cfg.config.tz).strftime("%a %b %d %H:%M:%S") if scanned else None,
+        "tag": tag, "tag_counts": tag_counts,
     })
+
+
+@router.post("/ui/source/{key}/rescan")
+def source_rescan(request: Request, key: str):
+    src = cfg.config.sources.get(key)
+    if not src:
+        raise HTTPException(404)
+    sources.scan(src)
+    return back(request)
+
+
+@router.get("/testcard")
+def testcard_redirect(request: Request):
+    q = str(request.query_params)
+    return RedirectResponse("/sources/testcards" + (f"?{q}" if q else ""), status_code=303)
 
 
 @router.post("/ui/upload")
@@ -97,7 +136,7 @@ def photo_sidecar(photo_id: int):
     if not p:
         raise HTTPException(404)
     sidecar.read(p)  # creates it if missing
-    return FileResponse(sidecar.path_for(photos.originals_dir(), p["sha"]), media_type="application/xml",
+    return FileResponse(sidecar.path_for(p), media_type="application/xml",
                         filename=f"{Path(p['filename']).stem}.xml")
 
 
@@ -208,19 +247,20 @@ def _png(img) -> bytes:
     return buf.getvalue()
 
 
-@router.get("/testcard")
 def testcard_page(request: Request):
     q = request.query_params
     if not cfg.config.devices:
-        return RedirectResponse("/?" + urlencode({"error": "Add a frame to devices.yaml (and Reload) before making test cards."}),
+        return RedirectResponse("/frames?" + urlencode({"error": "Add a frame to devices.yaml (and Reload) before making test cards."}),
                                 status_code=303)
     dev, kind, photo, segments = _card_args(q)
     with db.tx() as conn:
         all_photos = conn.execute("SELECT id, filename FROM photos ORDER BY id DESC").fetchall()
+        ctx = grid_context(conn, conn.execute(
+            "SELECT * FROM photos WHERE source = 'testcards' ORDER BY id DESC").fetchall())
     return templates.TemplateResponse(request, "testcard.html", {
-        "devices": list(cfg.config.devices.values()),
-        "dev": dev, "kind": kind, "photo": photo, "photos": all_photos,
-        "page": "testcard",
+        **ctx,
+        "dev": dev, "kind": kind, "photo": photo, "strip_photos": all_photos,
+        "section": "sources", "page": "testcards",
         "segments": list(zip(SEGMENTS, segments)), "tuning_keys": TUNING_KEYS,
         "kinds": testcards.KINDS,
         "query": urlencode({
@@ -247,7 +287,7 @@ async def testcard_save(request: Request):
     form = await request.form()
     dev, kind, card = _render(form)
     name = f"testcard-{kind}-{datetime.now(cfg.config.tz):%Y%m%d-%H%M}.png"
-    photo_id = photos.ingest(name, _png(card))
+    photo_id = photos.ingest(name, _png(card), source="testcards")
     with db.tx() as conn:
         # The card is already tuned per column; bypass device/pipeline tuning.
         conn.execute("UPDATE photos SET params_json = ? WHERE id = ?", (json.dumps(NEUTRAL_TUNING), photo_id))
@@ -256,4 +296,4 @@ async def testcard_save(request: Request):
             conn.execute("UPDATE device_state SET queued_photo_id = ? WHERE device_id = ?", (photo_id, dev.id))
     if form.get("queue"):
         return RedirectResponse(f"/frame/{dev.id}", status_code=303)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/sources/testcards", status_code=303)

@@ -126,3 +126,12 @@ constexpr const char *NTP_SERVER_2 = "time.nist.gov";
 constexpr const char *HOSTNAME = "xiao-booth";
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr uint32_t NTP_SYNC_TIMEOUT_MS = 10000;
+
+// -----------------------------------------------------------------------------
+// Upload to the eink_photo_server (see upload.cpp). Runs as the booth goes to
+// sleep, if include/secrets.h sets SERVER_URL and UPLOAD_TOKEN. The source id
+// must match the server's devices.yaml `sources:` entry.
+// -----------------------------------------------------------------------------
+constexpr const char *UPLOAD_SOURCE = "photobooth";
+constexpr uint32_t UPLOAD_HTTP_TIMEOUT_MS = 20000; // per photo
+constexpr uint32_t UPLOAD_BUDGET_MS = 60000;       // per session; the rest go next time

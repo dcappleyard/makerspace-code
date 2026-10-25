@@ -101,10 +101,13 @@ void writeRtc(time_t utc)
 
 void onSntpSync(struct timeval *) { sntpSynced = true; }
 
+} // namespace
+
 #ifdef WIFI_SSID
-// Connect, SNTP-sync, then always power WiFi down. True on an actual SNTP sync.
-bool syncFromNtp()
+bool wifiUp()
 {
+    if (WiFi.status() == WL_CONNECTED)
+        return true;
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -113,33 +116,45 @@ bool syncFromNtp()
     {
         delay(100);
     }
-    bool synced = false;
-    if (WiFi.status() == WL_CONNECTED)
+    if (WiFi.status() != WL_CONNECTED)
     {
-        sntpSynced = false;
-        sntp_set_time_sync_notification_cb(onSntpSync);
-        configTzTime(TZ_DEFAULT, NTP_SERVER_1, NTP_SERVER_2);
-        start = millis();
-        while (!sntpSynced && millis() - start < NTP_SYNC_TIMEOUT_MS)
-        {
-            delay(100);
-        }
-        synced = sntpSynced && clockValid();
-        if (synced)
-        {
-            writeRtc(time(nullptr));
-        }
+        Serial.println("WiFi: connect timed out");
+        wifiDown();
+        return false;
     }
-    else
-    {
-        Serial.println("Clock: WiFi connect timed out");
-    }
+    return true;
+}
+
+void wifiDown()
+{
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
+}
+
+bool ntpSyncNow()
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
+    sntpSynced = false;
+    sntp_set_time_sync_notification_cb(onSntpSync);
+    configTzTime(TZ_DEFAULT, NTP_SERVER_1, NTP_SERVER_2);
+    uint32_t start = millis();
+    while (!sntpSynced && millis() - start < NTP_SYNC_TIMEOUT_MS)
+    {
+        delay(100);
+    }
+    bool synced = sntpSynced && clockValid();
+    if (synced)
+    {
+        writeRtc(time(nullptr));
+    }
     return synced;
 }
+#else
+bool wifiUp() { return false; }
+void wifiDown() {}
+bool ntpSyncNow() { return false; }
 #endif
-} // namespace
 
 bool clockValid()
 {
@@ -189,10 +204,13 @@ void setupClock()
     }
 
 #ifdef WIFI_SSID
-    if (syncFromNtp())
+    // Connect, sync, and always power WiFi down again (the uploader brings it
+    // back briefly when there are photos to send -- see upload.cpp).
+    if (wifiUp() && ntpSyncNow())
     {
         source = "ntp";
     }
+    wifiDown();
 #else
     Serial.println("Clock: no secrets.h WiFi credentials, using RTC only");
 #endif

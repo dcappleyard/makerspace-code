@@ -41,7 +41,7 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
   - live MJPEG stream you can toggle on and off
   - date-time-named snapshots, kept on SD, or in PSRAM when there's no card
   - auto and manual exposure/gain controls persisted in NVS
-- Also used by: `xiao_s3_sense_photobooth/`, a touch-driven three-shot photo booth that light-sleeps between uses; see its README.
+- Also used by: `xiao_s3_sense_photobooth/`, a touch-driven three-shot photo booth that light-sleeps between uses and uploads its photos to the `eink_photo_server`; see its README.
 - Optional add-on: the 1.28" round touch display (next section), stacked on the same board.
 
 ## 1.28" Round Touch Display for XIAO

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ source_name }} · eInk Photo Server</title>
+{% include "_style.html" %}
+</head>
+<body>
+{% include "_nav.html" %}
+
+{% if source_key == "library" %}
+<div class="card">
+  <form method="post" action="/ui/upload" enctype="multipart/form-data" class="row">
+    <input type="file" name="files" accept="image/*,.xml" multiple required>
+    <button>Upload</button>
+  </form>
+  <p class="muted">Include a photo's <code>.xml</code> sidecar (same name, e.g. <code>harbor.jpg</code> + <code>harbor.xml</code> from prepare_image.py) to import its caption fields and tags; otherwise one is created from the photo's EXIF.</p>
+</div>
+{% elif folder %}
+<div class="card">
+  <div class="row"><b>{{ folder.name }}</b>
+    <form method="post" action="/ui/source/{{ source_key }}/rescan"><button>Rescan folder</button></form>
+    <span class="muted">last scan: {{ last_scan or "—" }} (every minute)</span></div>
+  <div class="status" style="margin-top:6px">
+    <div>Folder on the server: <code>{{ folder_path }}</code></div>
+    <div>Upload: <code>POST {{ upload_url }}</code>{% if not folder.upload_token %} <span class="warn">(no upload_token set -- uploads disabled)</span>{% endif %}</div>
+  </div>
+  <p class="muted">Photos arrive by upload (header <code>X-Access-Token</code> = the source's <code>upload_token</code>, <code>X-Filename</code>, JPEG body)
+    or by dropping image files into the folder. New photos get the tags {{ folder.tags|join(", ") or "—" }}{% if folder.tags %},{% endif %}
+    plus the date and shot letter from names like <code>2026-10-24_19-02-11_A.jpg</code>.</p>
+</div>
+{% endif %}
+
+{% if tag_counts %}
+<div class="row tagbar">Tags:
+  <a href="?" class="chip {{ 'on' if not tag }}">all</a>
+  {% for t in tag_counts %}<a href="?tag={{ t.tag|urlencode }}" class="chip {{ 'on' if t.tag == tag }}">{{ t.tag }} ({{ t.n }})</a>{% endfor %}
+</div>
+{% endif %}
+<p class="muted">{{ photos|length }} photo{{ "s" if photos|length != 1 }}{% if tag %} tagged <b>{{ tag }}</b>{% endif %}.
+  Click a photo to set its crop focal point. <b>Sim</b> shows it as the chosen frame would display it.</p>
+{% include "_photo_grid.html" %}
+</body>
+</html>

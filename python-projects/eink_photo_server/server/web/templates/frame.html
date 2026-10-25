@@ -35,7 +35,7 @@
       <div>Last confirmed: {{ st.last_success_at|local }}</div>
       <div>Next wake (target): <b>{{ st.next_target|local }}</b></div>
       <div class="muted">Sent to frame: {{ st.next_cron_sent|local }}{% if st.wake_offset_s %} (offset {{ st.wake_offset_s|duration }}){% endif %}</div>
-      <div>Now in: {{ kinds[current.block.kind] }} {% if (current.end - current.start).days >= 1 %}(all day){% else %}{{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}{% endif %}</div>
+      <div>Now in: {% if (current.end - current.start).days >= 1 %}(all day){% else %}{{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}{% endif %} — {{ block_text[current.block.key] }}</div>
       {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
         <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
       {% if st.hw_device_id %}<div class="muted">Frame id: {{ st.hw_device_id }}</div>{% endif %}
@@ -44,28 +44,39 @@
   <div class="muted">Tuning: {% for k, v in params.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
 </div>
 
+
+{% macro block_cells(fid, b, editable) %}
+      <td><input form="{{ fid }}" type="time" name="start" value="{{ b.start.strftime('%H:%M') if b else '' }}" {{ "required" if not b }} {{ "disabled" if not editable }}></td>
+      <td><select form="{{ fid }}" name="source" {{ "disabled" if not editable }}>
+            {% for key, name in source_choices %}<option value="{{ key }}" {{ "selected" if b and key == b.source }}>{{ name }}</option>{% endfor %}
+          </select></td>
+      <td><select form="{{ fid }}" name="selection" {{ "disabled" if not editable }}>
+            {% for k, name in selections.items() %}<option value="{{ k }}" {{ "selected" if b and k == b.selection }}>{{ name }}</option>{% endfor %}
+          </select></td>
+      <td><select form="{{ fid }}" name="photo_id" class="photo" {{ "disabled" if not editable }}>
+            <option value="">— (only for Specific photo)</option>
+            {% for p in photos %}<option value="{{ p.id }}" {{ "selected" if b and p.id == b.photo_id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}
+          </select></td>
+      <td><input form="{{ fid }}" class="num" type="number" min="5" name="interval" value="{{ (b.interval or '') if b else '' }}" placeholder="hold" {{ "disabled" if not editable }}></td>
+{% endmacro %}
 <h2>Schedule</h2>
 <div class="card">
   <p class="muted">A daily timeline: each block starts at its time and runs until the next block starts.
-    <b>Sleep</b> and <b>Load image</b> show one photo until the block ends (Sleep with no photo picks a random one from the playlist).
-    <b>Random image</b> and <b>Play playlist</b> change photo every interval, counted from the block's start.</p>
+    A block picks from a <b>source</b> (a raw source like the Library or Photobooth, or a <a href="/playlists">playlist</a>)
+    with a <b>selection</b> (next in order, random, most recent, or one specific photo), and either changes photo
+    <b>every N minutes</b> (counted from the block's start) or, with Every left blank, <b>holds</b> one photo until the block ends —
+    the frame doesn't wake again until then.</p>
   {% if using_fallback %}
   <p class="warn">No blocks yet — using the default from devices.yaml (shown below).
     <form method="post" action="/frame/{{ dev.id }}/blocks/from-defaults"><button>Make these editable</button></form></p>
   {% endif %}
   <table>
-    <tr class="muted"><td>Start</td><td>Block</td><td>Every (min)</td><td>Photo</td><td></td></tr>
+    <tr class="muted"><td>Start</td><td>Source</td><td>Selection</td><td>Photo</td><td>Every (min)</td><td></td></tr>
     {% for b in blocks %}
     {% set editable = not b.from_yaml %}
     <tr class="{{ 'now' if b.key == current.block.key }}">
       {% if editable %}<form id="b{{ b.key }}" method="post" action="/frame/{{ dev.id }}/blocks/{{ b.key }}/update"></form>{% endif %}
-      <td><input form="b{{ b.key }}" type="time" name="start" value="{{ b.start.strftime('%H:%M') }}" {{ "disabled" if not editable }}></td>
-      <td><select form="b{{ b.key }}" name="kind" {{ "disabled" if not editable }}>{% for k, label in kinds.items() %}<option value="{{ k }}" {{ "selected" if k == b.kind }}>{{ label }}</option>{% endfor %}</select></td>
-      <td><input form="b{{ b.key }}" class="num" type="number" min="5" name="interval" value="{{ b.interval or '' }}" placeholder="—" {{ "disabled" if not editable }}></td>
-      <td><select form="b{{ b.key }}" name="photo_id" class="photo" {{ "disabled" if not editable }}>
-            <option value="">{{ "random from playlist" if b.kind == "sleep" else "—" }}</option>
-            {% for p in photos %}<option value="{{ p.id }}" {{ "selected" if p.id == b.photo_id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}
-          </select></td>
+      {{ block_cells("b" ~ b.key, b, editable) }}
       <td class="row">{% if editable %}<button form="b{{ b.key }}">Save</button>
         <form method="post" action="/frame/{{ dev.id }}/blocks/{{ b.key }}/delete"><button title="Delete block">✕</button></form>{% endif %}
         {% if b.key == current.block.key %}<span class="muted">← now</span>{% endif %}</td>
@@ -73,11 +84,7 @@
     {% endfor %}
     <tr>
       <form id="addblock" method="post" action="/frame/{{ dev.id }}/blocks/add"></form>
-      <td><input form="addblock" type="time" name="start" required></td>
-      <td><select form="addblock" name="kind">{% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select></td>
-      <td><input form="addblock" class="num" type="number" min="5" name="interval" placeholder="60"></td>
-      <td><select form="addblock" name="photo_id" class="photo"><option value="">random from playlist / —</option>
-            {% for p in photos %}<option value="{{ p.id }}">#{{ p.id }} {{ p.filename }}</option>{% endfor %}</select></td>
+      {{ block_cells("addblock", none, true) }}
       <td><button form="addblock">Add block</button></td>
     </tr>
   </table>
@@ -86,33 +93,11 @@
     <div class="scroll"><table>
       <tr class="muted"><td>Wake</td><td>Block</td><td>Shows</td></tr>
       {% for w in plan %}
-      <tr><td>{{ w.at.strftime("%a %H:%M") }}</td><td>{{ kinds[w.block.kind] }} {{ w.block.start.strftime("%H:%M") }}</td><td>{{ w.shows }}</td></tr>
+      <tr><td>{{ w.at.strftime("%a %H:%M") }}</td><td>{{ w.block.start.strftime("%H:%M") }} block</td><td>{{ w.shows }}</td></tr>
       {% endfor %}
     </table></div>
     <p class="muted">Times are targets; the frame is sent target + wake offset. Queued photos and pause aren't shown here.</p>
   </details>
-</div>
-
-<h2>Playlist</h2>
-<div class="card">
-  <p class="muted">The photos Random and Play playlist blocks draw from. Add more from the <a href="/">Library</a>.</p>
-  <table>
-    {% for it in playlist %}{% set p = photo_by_id.get(it.photo_id) %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td>{% if p %}<img class="t" src="/ui/thumb/{{ p.id }}" alt="">{% endif %}</td>
-      <td>{{ p.filename if p else "?" }}{% if st.cursor == it.id %} <span class="muted">← last played</span>{% endif %}</td>
-      <td class="row">
-        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="up"><button>↑</button></form>
-        <form method="post" action="/ui/item/{{ it.id }}/move"><input type="hidden" name="direction" value="down"><button>↓</button></form>
-        <form method="post" action="/ui/item/{{ it.id }}/remove"><button title="Remove from playlist">✕</button></form>
-        {% if p %}<form method="post" action="/ui/device/{{ dev.id }}/queue"><input type="hidden" name="photo_id" value="{{ p.id }}"><button title="Serve on the next pull only">Show next</button></form>
-        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/prepared" target="_blank">file</a>
-        <a href="/ui/preview/{{ dev.id }}/{{ p.id }}/sim" target="_blank">sim</a>{% endif %}
-      </td>
-    </tr>
-    {% else %}<tr><td class="muted">Playlist is empty — add photos from the <a href="/">Library</a>.</td></tr>{% endfor %}
-  </table>
 </div>
 
 <h2>Wake timing</h2>

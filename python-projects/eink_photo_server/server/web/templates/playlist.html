@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ pl.name }} · eInk Photo Server</title>
+{% include "_style.html" %}
+</head>
+<body>
+{% include "_nav.html" %}
+<div class="card">
+  <div class="row">
+    <h3>{{ pl.name }}</h3>
+    <form method="post" action="/ui/playlist/{{ pl.id }}/rename" class="row"><input name="name" value="{{ pl.name }}" style="width:12em"> <button>Rename</button></form>
+    <form method="post" action="/ui/playlist/{{ pl.id }}/duplicate"><button>Duplicate</button></form>
+    <form method="post" action="/ui/playlist/{{ pl.id }}/delete" onsubmit="return confirm('Delete this playlist?')"><button>Delete</button></form>
+  </div>
+  <div class="muted">{{ items|length }} photo{{ "s" if items|length != 1 }} · used by:
+    {% for d in users %}<a href="/frame/{{ d.id }}">{{ d.name }}</a>{% if not loop.last %}, {% endif %}{% else %}no frames yet (add a schedule block on a frame's tab){% endfor %}</div>
+  <p class="muted">Add photos from any source with <b>Add to playlist</b>: {% for key, name in source_names.items() %}<a href="/sources/{{ key }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+</div>
+<div class="card">
+  <table>
+    {% for it in items %}{% set p = photo_by_id.get(it.photo_id) %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{% if p %}<img class="t" src="/ui/thumb/{{ p.id }}" alt="">{% endif %}</td>
+      <td>{{ p.filename if p else "?" }} <span class="muted">{{ source_names.get(p.source, p.source) if p else "" }}</span></td>
+      <td class="row">
+        <form method="post" action="/ui/playlist-item/{{ it.id }}/move"><input type="hidden" name="direction" value="up"><button>↑</button></form>
+        <form method="post" action="/ui/playlist-item/{{ it.id }}/move"><input type="hidden" name="direction" value="down"><button>↓</button></form>
+        <form method="post" action="/ui/playlist-item/{{ it.id }}/remove"><button title="Remove from playlist">✕</button></form>
+        {% if p and devices %}
+        <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/queue'">
+          <input type="hidden" name="photo_id" value="{{ p.id }}">
+          <select name="dev">{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+          <button title="Serve on that frame's next pull only">Show next</button>
+          <button type="button" onclick="window.open('/ui/preview/'+this.form.dev.value+'/{{ p.id }}/sim', '_blank')">Sim</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td class="muted">Empty — add photos from a source.</td></tr>{% endfor %}
+  </table>
+</div>
+</body>
+</html>

@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-{% set page = "testcard" %}{% include "_nav.html" %}
+{% include "_nav.html" %}
 <p class="muted">Three columns, each tuned with its own parameters, rendered at the frame's resolution.
   Saved cards bypass the device's tuning, so the panel shows exactly these A/B/C settings.</p>
 
@@ -18,7 +18,7 @@
   <div class="row">
     <label>Frame <select name="device">{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if d.id == dev.id }}>{{ d.name }} ({{ d.width }}×{{ d.height }})</option>{% endfor %}</select></label>
     <label>Card <select name="kind">{% for k in kinds %}<option value="{{ k }}" {{ "selected" if k == kind }}>{{ "Color" if k == "color" else "Black & white" }}</option>{% endfor %}</select></label>
-    <label>Photo strip <select name="photo_id"><option value="">— none —</option>{% for p in photos %}<option value="{{ p.id }}" {{ "selected" if photo and p.id == photo.id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}</select></label>
+    <label>Photo strip <select name="photo_id"><option value="">— none —</option>{% for p in strip_photos %}<option value="{{ p.id }}" {{ "selected" if photo and p.id == photo.id }}>#{{ p.id }} {{ p.filename }}</option>{% endfor %}</select></label>
   </div>
   <table style="width:auto; margin-top:8px">
     <tr><td></td>{% for k in tuning_keys %}<td class="muted">{{ k }}</td>{% endfor %}</tr>
@@ -42,5 +42,8 @@
   <figure><img src="/testcard/render?{{ query }}" alt="test card"><figcaption class="muted">Card (as sent, before rotation)</figcaption></figure>
   <figure><img src="/testcard/render?{{ query }}&amp;view=sim" alt="simulated panel"><figcaption class="muted">Spectra 6 dither simulation</figcaption></figure>
 </div>
+<h2>Saved test cards</h2>
+<p class="muted">Cards saved here carry neutral per-photo tuning, so a frame shows exactly their A/B/C settings. Use <b>Show next</b> to put one on a frame.</p>
+{% include "_photo_grid.html" %}
 </body>
 </html>

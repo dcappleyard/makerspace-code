@@ -61,3 +61,16 @@ devices:
       contrast: 1.0
       gamma: 1.0
       lift: 0
+
+# Folder sources: photos that arrive in a folder on the server rather than
+# through the web upload -- here, the photobooth camera
+# (esp32-projects/xiao_s3_sense_photobooth). Each gets its own tab under Sources
+# and can be used by playlists and schedule blocks.
+sources:
+  - id: photobooth                 # lowercase letters, digits, _
+    name: Photobooth
+    folder: sources/photobooth     # under DATA_DIR (./data); bind-mount another path here if you like
+    # POST /sources/photobooth/upload with X-Access-Token: <this>. The camera's
+    # secrets.h UPLOAD_TOKEN must match. Leave empty to only accept dropped files.
+    upload_token: CHANGE_ME_UPLOAD_TOKEN
+    tags: [photobooth]             # added to every new photo's sidecar

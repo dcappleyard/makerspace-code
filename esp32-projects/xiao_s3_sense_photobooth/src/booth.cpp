@@ -4,6 +4,7 @@
 #include "camera.h"
 #include "screen.h"
 #include "storage.h"
+#include "upload.h"
 
 #include <HWCDC.h>
 
@@ -48,6 +49,13 @@ bool liveFrame(const char *big, const char *small)
 void goToSleep()
 {
     cameraOff();
+    // Camera off and the screen still on: the moment to send new photos to the
+    // server (WiFi comes up just for this, then goes off again).
+    if (pendingUploads())
+    {
+        uploadPending();
+        takeTap(); // touches during the upload don't carry over
+    }
     panelOff();
     enter(State::Asleep);
     Serial.println("Asleep");

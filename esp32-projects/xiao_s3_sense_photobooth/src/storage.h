@@ -3,6 +3,7 @@
 #include "booth_config.h"
 
 #include <functional>
+#include <vector>
 
 // -----------------------------------------------------------------------------
 // Photo storage: /photos/<name>.jpg on the SD card when one is mounted,
@@ -37,3 +38,19 @@ SaveResult savePhoto(const uint8_t *data, size_t len, const String &base);
 
 size_t ramPhotoCount();
 size_t ramPhotoBytes();
+
+// --- Upload bookkeeping (see upload.cpp) ---------------------------------------
+// A photo on the card is "pending" until it has been uploaded, then it moves to
+// /photos/uploaded/ (kept, just out of the way). RAM photos are dropped once
+// uploaded -- the server has them.
+extern const char *UPLOADED_DIR; // "/photos/uploaded"
+std::vector<String> pendingSdPhotos(); // names in /photos, oldest (name order) first
+bool markSdUploaded(const String &name);
+struct RamPhotoRef
+{
+    String name;
+    const uint8_t *data;
+    size_t len;
+};
+std::vector<RamPhotoRef> ramPhotos();  // oldest first; valid until the next storage call
+void dropRamPhoto(const String &name);
