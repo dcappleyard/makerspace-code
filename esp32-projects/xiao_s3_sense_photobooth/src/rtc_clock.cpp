@@ -2,6 +2,7 @@
 
 #include "rtc_clock.h"
 
+#include <HTTPClient.h>
 #include <WiFi.h>
 #include <Wire.h>
 #include <esp_sntp.h>
@@ -156,6 +157,78 @@ void wifiDown() {}
 bool ntpSyncNow() { return false; }
 #endif
 
+namespace
+{
+// Days since 1970-01-01 for a civil date (Howard Hinnant's days_from_civil).
+long daysFromCivil(int y, unsigned m, unsigned d)
+{
+    y -= m <= 2;
+    long era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long)doe - 719468;
+}
+
+// "Sun, 25 Oct 2026 14:03:22 GMT" (RFC 7231 IMF-fixdate) -> epoch, or 0.
+time_t parseHttpDate(const String &s)
+{
+    int d, y, hh, mm, ss;
+    char mon[4] = {0};
+    if (sscanf(s.c_str(), "%*3s, %d %3s %d %d:%d:%d", &d, mon, &y, &hh, &mm, &ss) != 6)
+        return 0;
+    const char *months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char *at = strstr(months, mon);
+    if (!at || (at - months) % 3)
+        return 0;
+    unsigned m = (unsigned)((at - months) / 3 + 1);
+    return (time_t)daysFromCivil(y, m, (unsigned)d) * 86400 + hh * 3600 + mm * 60 + ss;
+}
+} // namespace
+
+bool serverTimeSync()
+{
+#if defined(WIFI_SSID) && defined(SERVER_URL)
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
+    HTTPClient http;
+    http.setTimeout(5000);
+    http.setConnectTimeout(5000);
+    if (!http.begin(String(SERVER_URL) + "/health"))
+        return false;
+    const char *keys[] = {"Date"};
+    http.collectHeaders(keys, 1);
+    int code = http.GET();
+    String date = http.header("Date");
+    http.end();
+    time_t t = code > 0 ? parseHttpDate(date) : 0;
+    if (t <= CLOCK_SANE_EPOCH)
+    {
+        Serial.printf("Clock: no usable Date from the server (%d, \"%s\")\n", code, date.c_str());
+        return false;
+    }
+    struct timeval tv = {t, 0};
+    settimeofday(&tv, nullptr);
+    writeRtc(t);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool syncClockOnline()
+{
+    // The photo server first: it's on the LAN, answers in milliseconds and is
+    // good to a second -- plenty for photo names. NTP only if that fails (it
+    // needs outside access, and waits NTP_SYNC_TIMEOUT_MS when there's none).
+    if (serverTimeSync())
+    {
+        Serial.printf("Clock: set from the photo server: %s\n", formatLocalTime().c_str());
+        return true;
+    }
+    return ntpSyncNow();
+}
+
 bool clockValid()
 {
     return time(nullptr) > CLOCK_SANE_EPOCH;
@@ -206,9 +279,9 @@ void setupClock()
 #ifdef WIFI_SSID
     // Connect, sync, and always power WiFi down again (the uploader brings it
     // back briefly when there are photos to send -- see upload.cpp).
-    if (wifiUp() && ntpSyncNow())
+    if (wifiUp() && syncClockOnline())
     {
-        source = "ntp";
+        source = "online";
     }
     wifiDown();
 #else

@@ -47,7 +47,7 @@ All of these timings are constants in `src/booth_config.h`: `LIVE_IDLE_SLEEP_MS`
 
 Photo names need the time. The round display has a **PCF8563 RTC** with a coin cell, which keeps time with the board off.
 - **At boot,** the booth reads the RTC.
-- **If `include/secrets.h` has WiFi credentials,** it also connects once, syncs from NTP, writes the time back to the RTC, and **switches WiFi off**.
+- **If `include/secrets.h` has WiFi credentials,** it also connects once, sets the clock, writes the time back to the RTC, and **switches WiFi off**. The clock comes from the photo server's HTTP `Date` header when `SERVER_URL` is set: it's on the LAN and needs no NTP or outside access. NTP is the fallback. Photos taken before the clock has ever been set are named `nodate_<uptime>`; the server dates those by arrival and tags them `nodate`.
 - **Without credentials,** it runs on the RTC alone. On a brand-new RTC (or a dead coin cell), photos get `nodate_` names until one boot with WiFi sets it.
 
 ### Sleep and power
@@ -77,7 +77,7 @@ src/booth.{h,cpp}    the state machine: sleep / live / Capture? / countdown, fla
 src/screen.{h,cpp}   round display: panel power, touch, light sleep, sprite-composed frames and overlays
 src/camera.{h,cpp}   esp32-camera init/off, live vs full-size capture modes
 src/storage.{h,cpp}  SD on the display's SPI bus, /photos, RAM fallback, names
-src/rtc_clock.{h,cpp} PCF8563 RTC read/write, NTP sync, wifiUp()/wifiDown()/ntpSyncNow()
+src/rtc_clock.{h,cpp} PCF8563 RTC read/write, clock sync (photo server Date header, then NTP), wifiUp()/wifiDown()
 src/upload.{h,cpp}   uploads pending photos to the eink_photo_server at sleep
 src/main.cpp         setup order and loop
 lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round display)
@@ -96,7 +96,7 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
 
 - **Accepted photos:** a card photo the server accepted (stored or duplicate) moves to `/photos/uploaded/`. It stays on the card, just out of the way. RAM-only photos are dropped once uploaded.
 - **Retries:** anything not sent is retried at the next sleep. That covers the server being down or refusing (the uploader stops at the first failure) and the per-session budget running out. Constants: `UPLOAD_BUDGET_MS` (60 s per session) and `UPLOAD_HTTP_TIMEOUT_MS` (20 s per photo).
-- **Clock:** while WiFi is up for an upload it also re-syncs NTP and writes the RTC, which fixes drift between reboots. Then WiFi goes off again.
+- **Clock:** before uploading, it sets the clock from the server (NTP as fallback) and writes the RTC. That fixes drift, and it means the next sequences get real names even if the clock was never set. Then WiFi goes off again.
 - **Needs all of** `WIFI_SSID`, `SERVER_URL` and `UPLOAD_TOKEN` in `secrets.h`. Without them upload is compiled out and nothing else changes.
 
 ## Verified vs. unverified

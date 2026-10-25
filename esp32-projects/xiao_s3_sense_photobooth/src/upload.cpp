@@ -74,6 +74,9 @@ size_t uploadPending()
         delay(1500);
         return 0;
     }
+    // Before anything else: sets the clock if it was never set, so the next
+    // sequences get real names (photos already taken keep their nodate_ name).
+    syncClockOnline();
     size_t sent = 0, n = 0;
     auto outOfTime = [&] { return (uint32_t)(millis() - start) > UPLOAD_BUDGET_MS; };
     char line[32];
@@ -107,7 +110,6 @@ size_t uploadPending()
         sent++;
     }
 
-    ntpSyncNow(); // WiFi's up anyway: keep the RTC from drifting between reboots
     wifiDown();
     snprintf(line, sizeof(line), "%u of %u sent", (unsigned)sent, (unsigned)total);
     drawMessage(sent == total ? "Uploaded" : "Upload incomplete", line);

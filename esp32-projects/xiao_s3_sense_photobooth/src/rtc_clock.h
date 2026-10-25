@@ -13,3 +13,8 @@ String formatLocalTime();  // local "YYYY-MM-DD HH:MM:SS TZ", or "not set"
 bool wifiUp();     // STA connect, bounded by WIFI_CONNECT_TIMEOUT_MS; true when connected
 void wifiDown();   // disconnect and WIFI_OFF
 bool ntpSyncNow(); // with WiFi up: SNTP sync, then write the RTC; true on a sync
+// With WiFi up: set the clock (and RTC) from the photo server's HTTP Date header
+// (SERVER_URL in secrets.h) -- no NTP or outside access needed.
+bool serverTimeSync();
+// With WiFi up: serverTimeSync(), else ntpSyncNow().
+bool syncClockOnline();

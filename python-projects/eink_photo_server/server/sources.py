@@ -81,6 +81,9 @@ def items(conn, key: str) -> list[Item]:
 _BOOTH_NAME = re.compile(r"(\d{4})-(\d{2})-(\d{2})_\d{2}-\d{2}-\d{2}(?:_([A-Za-z]))?")
 
 
+_NODATE_NAME = re.compile(r"nodate_\d+(?:_([A-Za-z]))?", re.I)
+
+
 def seed_from_name(src: cfg.FolderSource, name: str) -> dict:
     seed = {"tags": list(src.tags)}
     m = _BOOTH_NAME.search(name)
@@ -88,6 +91,16 @@ def seed_from_name(src: cfg.FolderSource, name: str) -> dict:
         seed["date"] = f"{m[1]}-{m[2]}-{m[3]}"
         if m[4]:
             seed["tags"].append(f"shot-{m[4].lower()}")
+        return seed
+    m = _NODATE_NAME.search(name)
+    if m:
+        # Taken before the camera's clock was set: the best date we have is
+        # arrival (cameras upload soon after a session). Tagged so it's findable.
+        from datetime import datetime
+        seed["date"] = datetime.now(cfg.config.tz).strftime("%Y-%m-%d")
+        seed["tags"].append("nodate")
+        if m[1]:
+            seed["tags"].append(f"shot-{m[1].lower()}")
     return seed
 
 
