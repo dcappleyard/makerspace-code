@@ -205,10 +205,9 @@ void serviceBooth()
     switch (state)
     {
     case State::Asleep:
-        // Battery readings (and the occasional log push) happen while asleep
-        // too: the light sleep below is capped at the next reading's due time.
-        if (serviceBatteryTimer())
-            pushBatteryLogSession();
+        // Battery readings happen while asleep too: the light sleep below is
+        // capped at the next reading's due time.
+        serviceBatteryTimer();
         if (stayAwake())
         {
             if (takeTap())
@@ -226,7 +225,11 @@ void serviceBooth()
     case State::Live:
         if (takeTap())
         {
-            drawPrompt("Capture?");
+            // Best guess so far; see BATTERY_PERCENT_MV in booth_config.h.
+            int pct = batteryPercentEstimate();
+            char bat[16];
+            snprintf(bat, sizeof(bat), "Bat: %d%%", pct);
+            drawPrompt("Capture?", pct >= 0 ? bat : nullptr);
             enter(State::Confirm);
         }
         else if ((uint32_t)(now - lastInteractionMs) > LIVE_IDLE_SLEEP_MS)

@@ -67,15 +67,18 @@ constexpr int ROUND_SD_CS = 3;          // D2: the display's own SD slot -- trie
 // 0-3, in 90-degree steps from the panel default. 3 = 270 deg clockwise: the
 // GUI's upright in the 3D-printed case (1 had it upside down).
 constexpr uint8_t DISPLAY_ROTATION = 3;
+// The camera sits upside down in the case: rotate everything it delivers by
+// 180 degrees at the sensor (hmirror + vflip toggled on top of whatever the
+// sensor defaults / saved settings were), so saved and uploaded photos come
+// out upright.
+constexpr bool CAMERA_ROTATE_180 = true;
 // Software flips of what's drawn, applied after decoding (cheap: row swaps).
-// They change only the screen, never the saved photo -- saved photos were
-// confirmed upright and correct. LIVE_* covers the live view and countdown:
-// a vertical flip there, together with the 180-degree GUI rotation above,
-// keeps the live image upright but mirrored left-right, like a mirror.
-// REVIEW_* covers the captured photo shown after each shot; flip it if the
-// review comes out upside down or mirrored in the case.
-constexpr bool LIVE_FLIP_H = false;
-constexpr bool LIVE_FLIP_V = true;
+// They change only the screen, never the saved photo. LIVE_* covers the live
+// view and countdown: a horizontal flip there mirrors it left-right, like a
+// mirror. REVIEW_* covers the captured photo shown after each shot (unflipped:
+// it's the upright photo); flip it if the review comes out wrong in the case.
+constexpr bool LIVE_FLIP_H = true;
+constexpr bool LIVE_FLIP_V = false;
 constexpr bool REVIEW_FLIP_H = false;
 constexpr bool REVIEW_FLIP_V = false;
 // RGB565 byte order of jpg2rgb565's output vs. what the panel expects; true was
@@ -157,13 +160,18 @@ constexpr uint32_t UPLOAD_BUDGET_MS = 60000;       // per session; the rest go n
 // -----------------------------------------------------------------------------
 constexpr int BATTERY_ADC_PIN = 1; // A0 / D0
 constexpr int BATTERY_ADC_SAMPLES = 16;
+constexpr int BATTERY_MIN_VALID_A0_MV = 300; // below this: no battery seen on A0
 constexpr float BATTERY_DIVIDER = 2.0f;
 constexpr uint32_t BATTERY_LOG_INTERVAL_S = 300;   // a "timer" row this often while asleep
-// The log is pushed to the server with every photo upload, and on its own this
-// often (WiFi up for a few seconds, screen staying off) so a discharge run
-// reports in even when nobody uses the booth. ~0.3 mAh per push.
-constexpr uint32_t BATTERY_UPLOAD_INTERVAL_S = 2 * 3600;
+// The log is pushed to the server only along with new photos (no WiFi just
+// for the log), so the server's copy is as fresh as the last photo upload.
 constexpr size_t BATTERY_LOG_MIN_FREE_BYTES = 16 * 1024; // stop logging below this
+// Best-guess % shown under the Capture? prompt, until the discharge logs give a
+// measured curve: battery mV at 100%, 90%, ... 0% (resting, not under load).
+// A typical single-cell LiPo resting-voltage curve, except 0% is set at
+// 3.50 V, about where the XIAO's regulator drops out and the booth browns out.
+// Replace with the curve from a full discharge run once there is one.
+constexpr int BATTERY_PERCENT_MV[11] = {4200, 4110, 4020, 3950, 3870, 3840, 3800, 3770, 3730, 3690, 3500};
 constexpr size_t BATTERY_UPLOAD_CHUNK = 32 * 1024;       // bytes per POST
 // Change this number (any value) in a flash to start a fresh, empty log.
 constexpr uint8_t BATTERY_LOG_GENERATION = 1;

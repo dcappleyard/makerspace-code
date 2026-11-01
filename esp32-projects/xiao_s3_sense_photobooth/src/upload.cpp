@@ -182,22 +182,8 @@ bool pushBatteryLog()
             break; // server down or refusing: try again next push
     }
     free(buf);
-    markBatteryLogPushed();
     return done;
 #else
     return false;
 #endif
-}
-
-void pushBatteryLogSession()
-{
-#if UPLOAD_ENABLED
-    if (wifiUp())
-    {
-        syncClockOnline(); // keeps the RTC honest while we're online anyway
-        pushBatteryLog();
-    }
-    wifiDown();
-#endif
-    markBatteryLogPushed();
 }

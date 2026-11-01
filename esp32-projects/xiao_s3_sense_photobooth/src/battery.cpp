@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <esp_random.h>
+#include <string.h>
 #include <time.h>
 
 namespace
@@ -20,7 +21,7 @@ String logPath;
 uint32_t bootCount = 0;
 size_t sentBytes = 0;
 uint32_t lastSampleMs = 0;
-uint32_t lastPushMs = 0;
+int lastRestBatteryMv = 0; // from the last boot/wake/sleep/timer row
 
 void deleteDir(const char *dir)
 {
@@ -88,7 +89,6 @@ void setupBattery()
     logPath = String(LOG_DIR) + "/" + logId + ".csv";
 
     lastSampleMs = millis();
-    lastPushMs = millis();
     logBattery("boot");
 }
 
@@ -102,6 +102,8 @@ void logBattery(const char *event)
     for (int i = 0; i < BATTERY_ADC_SAMPLES; i++)
         sum += analogReadMilliVolts(BATTERY_ADC_PIN);
     int a0 = sum / BATTERY_ADC_SAMPLES;
+    if (strcmp(event, "upload") != 0) // uploads run with WiFi up: under load
+        lastRestBatteryMv = (int)(a0 * BATTERY_DIVIDER);
 
     time_t now = time(nullptr);
     char local[24] = "";
@@ -127,6 +129,23 @@ void logBattery(const char *event)
     lastSampleMs = millis();
 }
 
+int batteryPercentEstimate()
+{
+    int mv = lastRestBatteryMv;
+    if (mv < BATTERY_MIN_VALID_A0_MV * BATTERY_DIVIDER)
+        return -1;
+    const int *t = BATTERY_PERCENT_MV;
+    if (mv >= t[0])
+        return 100;
+    if (mv <= t[10])
+        return 0;
+    int i = 1;
+    while (mv < t[i])
+        i++;
+    // Between t[i-1] (100 - 10*(i-1) %) and t[i] (100 - 10*i %).
+    return 100 - 10 * i + 10 * (mv - t[i]) / (t[i - 1] - t[i]);
+}
+
 uint32_t msUntilBatterySample()
 {
     uint32_t elapsed = millis() - lastSampleMs;
@@ -134,13 +153,10 @@ uint32_t msUntilBatterySample()
     return elapsed >= interval ? 0 : interval - elapsed;
 }
 
-bool serviceBatteryTimer()
+void serviceBatteryTimer()
 {
-    if (!fsOk)
-        return false;
-    if (msUntilBatterySample() == 0)
+    if (fsOk && msUntilBatterySample() == 0)
         logBattery("timer");
-    return (uint32_t)(millis() - lastPushMs) >= BATTERY_UPLOAD_INTERVAL_S * 1000UL && batteryLogSize() > sentBytes;
 }
 
 String batteryLogId() { return logId; }
@@ -178,4 +194,3 @@ size_t readBatteryLog(size_t offset, uint8_t *buf, size_t max)
     return n;
 }
 
-void markBatteryLogPushed() { lastPushMs = millis(); }

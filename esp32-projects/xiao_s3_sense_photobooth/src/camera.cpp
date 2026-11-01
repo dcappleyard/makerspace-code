@@ -187,6 +187,13 @@ bool cameraInit()
         s->set_saturation(s, -2);
     }
     applySaved(s);
+    if (CAMERA_ROTATE_180)
+    {
+        // Relative to whatever is set now, so it stacks on the OV3660 tweak
+        // above and on any mirror/flip saved by ../xiao_s3_sense_webcam.
+        s->set_hmirror(s, !s->status.hmirror);
+        s->set_vflip(s, !s->status.vflip);
+    }
     setMode(LIVE_FRAMESIZE, LIVE_QUALITY);
     ready = true;
     discard(WAKE_DISCARD_FRAMES);

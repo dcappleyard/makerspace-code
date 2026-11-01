@@ -89,23 +89,26 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 
 ### Screen orientation
 
+- **Camera:** the camera sits upside down in the case, so `CAMERA_ROTATE_180 = true` turns everything it delivers by 180° at the sensor (mirror + flip, on top of any saved settings). Saved and uploaded photos come out upright.
 - **Rotation:** `DISPLAY_ROTATION = 3` makes the GUI upright in the 3D-printed case.
-- **Live view:** `LIVE_FLIP_V = true` flips it vertically in software. Combined with the 180° rotation, that keeps it upright but mirrored left-right, like a mirror.
-- **Saved photos:** the flips only affect the screen. The photos themselves were already upright and correct, and are left alone.
-- **Review:** the photo shown after the shot uses `REVIEW_FLIP_H` / `REVIEW_FLIP_V` (both off). Turn one on if the review comes out upside down or mirrored.
+- **Live view:** `LIVE_FLIP_H = true` mirrors it left-right in software, like a mirror. That only affects the screen.
+- **Review:** the photo shown after the shot is the upright photo itself, so `REVIEW_FLIP_H` / `REVIEW_FLIP_V` are off. Turn one on if it comes out wrong in the case.
 
 ## Battery log
 
 The booth keeps a CSV log of the LiPo's voltage. A0 is read through the round display's divider, so the KE switch must route it, and the battery voltage is assumed to be 2 × A0.
-- **When a row is written:** at boot, wake, sleep and each upload, and every **5 minutes** while asleep (`BATTERY_LOG_INTERVAL_S`). For that reading the board wakes from light sleep on a timer, with the screen off; a touch still wakes the booth as normal.
+- **When a row is written:** at boot, wake, sleep and each upload, and every **5 minutes** while asleep (`BATTERY_LOG_INTERVAL_S`). For that reading the board wakes from light sleep on a timer, with the screen off and no WiFi; a touch still wakes the booth as normal.
 - **Where it's kept:** in the board's internal flash (LittleFS), so it survives the battery dying. Rows: `epoch,local_time,boot,uptime_s,event,a0_mv,battery_mv`.
 - **How it reaches the Pi:** new rows are pushed to the photo server's `POST /sources/photobooth/battery`.
-  - It goes with every photo upload, and on its own every **2 hours** (`BATTERY_UPLOAD_INTERVAL_S`; WiFi up for a few seconds, screen off), so a discharge run reports in even when nobody uses the booth.
+  - It only goes **with photo uploads**: WiFi never comes up just for the log. So the server's copy is as fresh as the last photo; rows logged since then wait in flash until the next one.
   - The server appends by byte offset, so retries never duplicate rows.
-  - Rows written after the last push before the battery died go up at the first push after it's recharged.
+  - Rows written after the last photo before the battery died go up with the first photo after it's recharged.
+- **On the booth:** the "Capture?" prompt shows **Bat: X%** under Yes/No.
+  - It's a best guess from the last **resting** reading, the one logged at the start of each wake before the screen and camera draw current. Under load the voltage sags and would read low.
+  - That reading is mapped through `BATTERY_PERCENT_MV`: a typical LiPo resting-voltage curve, with 0% at 3.50 V, about where the booth browns out.
+  - Replace that table with the curve from a full discharge run once you have one. The line is hidden if A0 sees no battery.
 - **Viewing:** on the server, the photobooth source's page has a **Battery logs** panel with a voltage chart, a CSV download and Delete.
 - **Clearing:** flashing a build with a different `BATTERY_LOG_GENERATION` starts a fresh log under a new id, and wipes the old one from the booth's flash. The server keeps old logs until you delete them there.
-- **Push cost:** about 0.3 mAh per push, so ~4 mAh/day at the 2-hour interval. Raise the interval once you've got your curves.
 
 ## WiFi upload
 
@@ -126,9 +129,11 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
 **Not yet confirmed on hardware:** the upload. That covers photos moving to `/photos/uploaded/`, a retry after the server was down, and no-SD RAM shots.
 
 **Built, not yet run on hardware (2026-10-31):**
-- the GUI rotated 180° (`DISPLAY_ROTATION = 3`), the mirrored live view (`LIVE_FLIP_V`), and the review orientation
+- the GUI rotated 180° (`DISPLAY_ROTATION = 3`)
+- photos rotated 180° at the sensor (`CAMERA_ROTATE_180`), with the live view mirrored (`LIVE_FLIP_H`) and the review left as the photo
 - a single shot per "Yes"
-- the battery log: timer wakes, the server push, and the fresh-log clear
+- the battery log: timer wakes, pushing with photo uploads, and the fresh-log clear
+- the "Bat: X%" line on the Capture? prompt
 
 **Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts at 20 MHz, and photos land in `/photos/`.
 
@@ -153,4 +158,5 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
   - one file `<date_time>.jpg` lands on the card at full size and looks properly exposed
 - **No card:** the review says "no SD card". Insert a card, let it sleep, tap again: the photos move to `/photos/`.
 - **Idle:** the live view goes to sleep after 30 s.
-- **Battery log:** a `Battery log: started fresh log …` line at boot. Within 2 hours of going to sleep, `Battery log <id>: … -> 200` on the serial monitor (or the server's log), and the chart appears on the server's photobooth page.
+- **Battery log:** a `Battery log: started fresh log …` line at boot. After taking a photo and letting the booth sleep, `Battery log <id>: … -> 200` on the serial monitor (or the server's log), and the chart appears on the server's photobooth page.
+- **Orientation:** the uploaded photo is upright. The live view is mirrored, and the review is upright and not mirrored.

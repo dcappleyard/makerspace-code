@@ -270,11 +270,11 @@ bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char 
     return true;
 }
 
-void drawPrompt(const char *question)
+void drawPrompt(const char *question, const char *footer)
 {
     // Over the last live frame (still in the sprite): a dark band with the
-    // question and two halves, Yes left / No right.
-    frame.fillRect(0, 60, SCREEN_SIZE, 122, TFT_BLACK);
+    // question and two halves, Yes left / No right, plus the footer line.
+    frame.fillRect(0, 60, SCREEN_SIZE, footer ? 150 : 122, TFT_BLACK);
     frame.setTextDatum(MC_DATUM);
     frame.setTextColor(TFT_WHITE);
     frame.drawString(question, SCREEN_SIZE / 2, 82, 4);
@@ -282,6 +282,11 @@ void drawPrompt(const char *question)
     frame.fillRoundRect(124, 104, 92, 64, 12, TFT_DARKGREY);
     frame.drawString("Yes", 70, 136, 4);
     frame.drawString("No", 170, 136, 4);
+    if (footer)
+    {
+        frame.setTextColor(TFT_LIGHTGREY);
+        frame.drawString(footer, SCREEN_SIZE / 2, 192, 2);
+    }
     frame.pushSprite(0, 0);
 }
 

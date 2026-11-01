@@ -42,8 +42,9 @@ bool sleepUntilTouch(uint32_t maxMs = 0);
 // flipH / flipV mirror the decoded image (screen only).
 bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small,
               bool flipH = false, bool flipV = false);
-// "Capture?" with Yes (left half) / No (right half), over the last frame.
-void drawPrompt(const char *question);
+// "Capture?" with Yes (left half) / No (right half), over the last frame,
+// and an optional small line under the buttons (e.g. "Bat: 73%").
+void drawPrompt(const char *question, const char *footer = nullptr);
 void flashWhite();
 void blankScreen(); // black, straight to the panel (ends the flash)
 void drawMessage(const char *line1, const char *line2 = nullptr);
