@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .. import config as cfg
-from .. import db, photos, pipelines, prepare, sidecar, sources, testcards
+from .. import battery, db, photos, pipelines, prepare, sidecar, sources, testcards
 from ..pipelines.base import NEUTRAL_TUNING, TUNING_KEYS, load_oriented
 from .common import back, device_or_404, require_admin, templates
 
@@ -48,7 +48,7 @@ def grid_context(conn, rows) -> dict:
 
 
 @router.get("/sources/{key}")
-def source_page(request: Request, key: str, tag: str = ""):
+def source_page(request: Request, key: str, tag: str = "", log: str = ""):
     if key == "testcards":
         return testcard_page(request)
     if not sources.is_raw(key):
@@ -75,7 +75,39 @@ def source_page(request: Request, key: str, tag: str = ""):
         "upload_url": f"{base}/sources/{key}/upload" if folder else None,
         "last_scan": datetime.fromtimestamp(scanned, cfg.config.tz).strftime("%a %b %d %H:%M:%S") if scanned else None,
         "tag": tag, "tag_counts": tag_counts,
+        **_battery_context(key, log),
     })
+
+
+def _battery_context(key: str, log: str) -> dict:
+    logs = battery.list_logs(key) if key in cfg.config.sources else []
+    sel = next((l for l in logs if l["id"] == log), logs[0] if logs else None)
+    return {"battery_logs": logs, "battery_sel": sel["id"] if sel else None,
+            "battery_chart": battery.chart_svg(key, sel["id"], cfg.config.tz) if sel else ""}
+
+
+@router.get("/ui/source/{key}/battery/{log_id}.csv")
+def battery_download(key: str, log_id: str):
+    if key not in cfg.config.sources:
+        raise HTTPException(404)
+    try:
+        path = battery.log_path(key, log_id)
+    except ValueError:
+        raise HTTPException(404)
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/csv", filename=f"{key}-battery-{log_id}.csv")
+
+
+@router.post("/ui/source/{key}/battery/{log_id}/delete")
+def battery_delete(request: Request, key: str, log_id: str):
+    if key not in cfg.config.sources:
+        raise HTTPException(404)
+    try:
+        battery.delete(key, log_id)
+    except ValueError:
+        raise HTTPException(404)
+    return back(request)
 
 
 @router.post("/ui/source/{key}/rescan")

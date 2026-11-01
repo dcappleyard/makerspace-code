@@ -233,6 +233,21 @@ sources:
 curl -X POST -H 'X-Access-Token: <token>' -H 'X-Filename: test.jpg' -H 'Content-Type: image/jpeg' --data-binary @test.jpg http://<pi>:8080/sources/photobooth/upload
 ```
 
+### Battery logs
+The photobooth keeps a battery CSV in its flash and pushes new bytes whenever it is online: `POST /sources/<id>/battery`, token-authenticated like the upload (`X-Access-Token` = the source's `upload_token`; `401` otherwise).
+- **Headers:** `X-Log-Id` (8-16 lowercase hex; a new id means a new log, e.g. after a flash/clear) and `X-Offset` (integer >= 0: the byte offset in the device's log where the body starts).
+- **Body:** raw `text/csv`, at most 256 KB (`413` above). The log starts at offset 0 with `epoch,local_time,boot,uptime_s,event,a0_mv,battery_mv` (`event` = boot/wake/sleep/timer/upload).
+- **Append:** with L the stored length, offset > L gives `409 {"length": L}` (the device resends from L); otherwise only `body[L-offset:]` is appended, so a retried overlap adds nothing, and the reply is `200 {"ok":true,"length":<new L>}`. `400` for a bad id or offset.
+- **File:** `<DATA_DIR>/battery/<source_id>/<log_id>.csv`.
+- **Viewer:** the source's tab shows a "Battery logs" panel when logs exist: size, rows, first/last time, last mV, CSV download, Delete, and a chart of the selected (default newest) log. Rows with epoch below 2025-01-01 (no clock) are left off the chart.
+
+```bash
+curl -X POST -H 'X-Access-Token: <token>' -H 'X-Log-Id: a1b2c3d4' -H 'X-Offset: 0' -H 'Content-Type: text/csv' --data-binary @chunk.csv http://<pi>:8080/sources/photobooth/battery
+# {"ok":true,"length":412}
+# resending from beyond the stored length: HTTP 409 {"length":412} -> resend from 412
+curl -i -X POST -H 'X-Access-Token: <token>' -H 'X-Log-Id: a1b2c3d4' -H 'X-Offset: 9999' --data-binary @chunk.csv http://<pi>:8080/sources/photobooth/battery
+```
+
 ## Upgrading
 The first start on the new version migrates the database automatically, once (schema version 2, recorded in a `meta` table):
 - each frame's old playlist becomes a playlist named after the frame

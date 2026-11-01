@@ -32,6 +32,26 @@
 </div>
 {% endif %}
 
+{% if battery_logs %}
+<div class="card">
+  <h3>Battery logs</h3>
+  <table>
+    {% for l in battery_logs %}
+    <tr>
+      <td>{% if l.id == battery_sel %}<b>{{ l.id }}</b>{% else %}<a href="?log={{ l.id }}">{{ l.id }}</a>{% endif %}</td>
+      <td>{{ (l.size / 1024)|round(1) }} KB</td>
+      <td>{{ l.rows }} rows</td>
+      <td>{{ l.first or "—" }} → {{ l.last or "—" }}</td>
+      <td>{% if l.last_mv %}{{ l.last_mv }} mV{% else %}—{% endif %}</td>
+      <td><a href="/ui/source/{{ source_key }}/battery/{{ l.id }}.csv">CSV</a></td>
+      <td><form method="post" action="/ui/source/{{ source_key }}/battery/{{ l.id }}/delete" onsubmit="return confirm('Delete battery log {{ l.id }}?')"><button>Delete</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div style="margin-top:8px">{{ battery_chart|safe }}</div>
+</div>
+{% endif %}
+
 {% if tag_counts %}
 <div class="row tagbar">Tags:
   <a href="?" class="chip {{ 'on' if not tag }}">all</a>
