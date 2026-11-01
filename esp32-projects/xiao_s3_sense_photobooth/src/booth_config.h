@@ -64,7 +64,20 @@ constexpr int TOUCH_INT_PIN = 44;      // D7, active LOW while touched
 constexpr uint8_t TOUCH_I2C_ADDR = 0x2E;
 constexpr int BACKLIGHT_PIN = 43;      // D6 (Seeed_GFX's TFT_BL) -- held LOW through sleep
 constexpr int ROUND_SD_CS = 3;          // D2: the display's own SD slot -- tried after the Sense slot; held HIGH when unused
-constexpr uint8_t DISPLAY_ROTATION = 1; // 0-3, in 90-degree steps; 1 = rotated 90 deg clockwise from the panel default
+// 0-3, in 90-degree steps from the panel default. 3 = 270 deg clockwise: the
+// GUI's upright in the 3D-printed case (1 had it upside down).
+constexpr uint8_t DISPLAY_ROTATION = 3;
+// Software flips of what's drawn, applied after decoding (cheap: row swaps).
+// They change only the screen, never the saved photo -- saved photos were
+// confirmed upright and correct. LIVE_* covers the live view and countdown:
+// a vertical flip there, together with the 180-degree GUI rotation above,
+// keeps the live image upright but mirrored left-right, like a mirror.
+// REVIEW_* covers the captured photo shown after each shot; flip it if the
+// review comes out upside down or mirrored in the case.
+constexpr bool LIVE_FLIP_H = false;
+constexpr bool LIVE_FLIP_V = true;
+constexpr bool REVIEW_FLIP_H = false;
+constexpr bool REVIEW_FLIP_V = false;
 // RGB565 byte order of jpg2rgb565's output vs. what the panel expects; true was
 // confirmed on hardware in ../xiao_s3_sense_webcam (false gives rainbow banding).
 constexpr bool PREVIEW_SWAP_BYTES = true;
@@ -81,7 +94,7 @@ constexpr uint32_t TOUCH_LOCKOUT_MS = 1000;
 // -----------------------------------------------------------------------------
 constexpr uint32_t LIVE_IDLE_SLEEP_MS = 30000;   // live view with no touch -> sleep
 constexpr uint32_t CONFIRM_TIMEOUT_MS = 3000;    // unanswered "Capture?" -> back to live view
-constexpr uint8_t SHOTS_PER_SEQUENCE = 3;        // named _A, _B, _C
+constexpr uint8_t SHOTS_PER_SEQUENCE = 1;        // 1: <date_time>.jpg; more: _A, _B, _C ...
 constexpr uint8_t COUNTDOWN_FROM = 3;            // 3..2..1
 constexpr uint32_t COUNTDOWN_STEP_MS = 1000;     // per number
 constexpr uint32_t FLASH_MS = 250;               // full-white flash at capture (minimum: it also covers one full-size frame)
@@ -135,3 +148,22 @@ constexpr uint32_t NTP_SYNC_TIMEOUT_MS = 10000;
 constexpr const char *UPLOAD_SOURCE = "photobooth";
 constexpr uint32_t UPLOAD_HTTP_TIMEOUT_MS = 20000; // per photo
 constexpr uint32_t UPLOAD_BUDGET_MS = 60000;       // per session; the rest go next time
+
+// -----------------------------------------------------------------------------
+// Battery log (see battery.cpp). A0 = battery through the round display's
+// divider -- the KE switch must route it. Seeed doesn't publish the ratio; 1:2
+// fits its example code for a 3.7-4.2 V LiPo (same assumption as
+// ../xiao_s3_sense_webcam), so battery_mv in the log is a0_mv * 2.
+// -----------------------------------------------------------------------------
+constexpr int BATTERY_ADC_PIN = 1; // A0 / D0
+constexpr int BATTERY_ADC_SAMPLES = 16;
+constexpr float BATTERY_DIVIDER = 2.0f;
+constexpr uint32_t BATTERY_LOG_INTERVAL_S = 300;   // a "timer" row this often while asleep
+// The log is pushed to the server with every photo upload, and on its own this
+// often (WiFi up for a few seconds, screen staying off) so a discharge run
+// reports in even when nobody uses the booth. ~0.3 mAh per push.
+constexpr uint32_t BATTERY_UPLOAD_INTERVAL_S = 2 * 3600;
+constexpr size_t BATTERY_LOG_MIN_FREE_BYTES = 16 * 1024; // stop logging below this
+constexpr size_t BATTERY_UPLOAD_CHUNK = 32 * 1024;       // bytes per POST
+// Change this number (any value) in a flash to start a fresh, empty log.
+constexpr uint8_t BATTERY_LOG_GENERATION = 1;

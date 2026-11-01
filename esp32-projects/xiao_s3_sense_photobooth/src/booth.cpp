@@ -1,6 +1,7 @@
 #include "booth_config.h"
 
 #include "booth.h"
+#include "battery.h"
 #include "camera.h"
 #include "screen.h"
 #include "storage.h"
@@ -41,7 +42,7 @@ bool liveFrame(const char *big, const char *small)
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb)
         return false;
-    bool ok = drawJpeg(fb->buf, fb->len, fb->width, fb->height, big, small);
+    bool ok = drawJpeg(fb->buf, fb->len, fb->width, fb->height, big, small, LIVE_FLIP_H, LIVE_FLIP_V);
     esp_camera_fb_return(fb);
     return ok;
 }
@@ -53,16 +54,18 @@ void goToSleep()
     // server (WiFi comes up just for this, then goes off again).
     if (pendingUploads())
     {
-        uploadPending();
-        takeTap(); // touches during the upload don't carry over
+        uploadPending(); // also pushes the battery log while WiFi is up
+        takeTap();       // touches during the upload don't carry over
     }
     panelOff();
+    logBattery("sleep");
     enter(State::Asleep);
     Serial.println("Asleep");
 }
 
 void wake()
 {
+    logBattery("wake");
     panelOn();
     drawMessage("One moment...");
     // A card inserted while asleep gets picked up here (and any photos held in
@@ -105,6 +108,7 @@ void waitUntil(uint32_t untilMs)
 // frozen "1"), so the white flash only spans one fresh frame: flash, grab,
 // back to black after FLASH_MS, then decode + show the photo for REVIEW_MS,
 // and save it while it's on screen.
+// `letter` is 0 for a single-shot sequence: no _A suffix, no label.
 void shoot(const String &base, char letter)
 {
     flashWhite();
@@ -136,21 +140,24 @@ void shoot(const String &base, char letter)
     if (!jpg)
     {
         drawMessage("Capture failed");
-        Serial.printf("Shot %c: capture failed\n", letter);
+        Serial.printf("Shot %c: capture failed\n", letter ? letter : '-');
         waitUntil(millis() + 1500);
         return;
     }
-    char label[24];
-    snprintf(label, sizeof(label), sdIsMounted() ? "%c" : "%c - no SD card", letter);
+    char label[24] = "";
+    if (letter)
+        snprintf(label, sizeof(label), sdIsMounted() ? "%c" : "%c - no SD card", letter);
+    else if (!sdIsMounted())
+        strcpy(label, "no SD card");
     uint32_t decodeStart = millis();
-    drawJpeg(jpg, len, w, h, nullptr, label);
+    drawJpeg(jpg, len, w, h, nullptr, label[0] ? label : nullptr, REVIEW_FLIP_H, REVIEW_FLIP_V);
     uint32_t reviewStart = millis();
 
     uint32_t saveStart = millis();
-    SaveResult r = savePhoto(jpg, len, base + "_" + letter);
+    SaveResult r = savePhoto(jpg, len, letter ? base + "_" + letter : base);
     uint32_t saveMs = millis() - saveStart;
     free(jpg);
-    Serial.printf("Shot %c: %dx%d, %u bytes -> %s (%s); flash %lu ms, review decode %lu ms, save %lu ms\n", letter, w, h,
+    Serial.printf("Shot %c: %dx%d, %u bytes -> %s (%s); flash %lu ms, review decode %lu ms, save %lu ms\n", letter ? letter : '-', w, h,
                   (unsigned)len, r.ok ? r.name.c_str() : "NOT SAVED", r.onSd ? "SD" : "RAM", (unsigned long)flashMs,
                   (unsigned long)(reviewStart - decodeStart), (unsigned long)saveMs);
     waitUntil(reviewStart + REVIEW_MS);
@@ -163,19 +170,19 @@ void runSequence()
     Serial.printf("Sequence %s%s\n", base.c_str(), dated ? "" : " (clock not set)");
     for (uint8_t shot = 0; shot < SHOTS_PER_SEQUENCE; shot++)
     {
-        char letter = 'A' + shot;
+        char letter = SHOTS_PER_SEQUENCE > 1 ? 'A' + shot : 0;
         char small[2] = {letter, 0};
         for (int n = COUNTDOWN_FROM; n >= 1; n--)
         {
             char big[4];
             snprintf(big, sizeof(big), "%d", n);
-            liveFor(COUNTDOWN_STEP_MS, big, small);
+            liveFor(COUNTDOWN_STEP_MS, big, letter ? small : nullptr);
         }
         // The "1" stays on screen (frozen) while the camera switches to full
         // size, so the flash itself is short.
         uint32_t t0 = millis();
         cameraCaptureMode();
-        Serial.printf("Shot %c: switch to full size %lu ms\n", letter, (unsigned long)(millis() - t0));
+        Serial.printf("Shot %c: switch to full size %lu ms\n", letter ? letter : '-', (unsigned long)(millis() - t0));
         shoot(base, letter);
     }
 }
@@ -198,6 +205,10 @@ void serviceBooth()
     switch (state)
     {
     case State::Asleep:
+        // Battery readings (and the occasional log push) happen while asleep
+        // too: the light sleep below is capped at the next reading's due time.
+        if (serviceBatteryTimer())
+            pushBatteryLogSession();
         if (stayAwake())
         {
             if (takeTap())
@@ -205,9 +216,8 @@ void serviceBooth()
             else
                 delay(20);
         }
-        else
+        else if (sleepUntilTouch(msUntilBatterySample() + 1)) // a touch counts as the tap
         {
-            sleepUntilTouch(); // returns on a touch, which counts as the tap
             takeTap();
             wake();
         }

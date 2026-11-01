@@ -67,8 +67,7 @@ The [1.28" Round Touch Display for XIAO](https://www.seeedstudio.com/1-28-Round-
 
 **Before you start:** check the display's KE switch, a 2-position DIP switch marked "ON KE" / "1 2". One switch routes GPIO43 to the backlight; the other routes the battery reading to A0. Seeed doesn't say which is which, or which physical side its "ON" means.
 - **Symptom when wrong:** "Screen on" in the serial log after a tap, but the panel stays completely unlit.
-- **On our unit:** it works with **both switches OFF**, pushed away from the "ON" marking. That's the opposite of what Seeed's wiki implies. With both toward "ON", the panel stayed dark.
-- The firmware doesn't use A0, so both switches can sit on the same side.
+- **Set both to Seeed's ON position**, so GPIO43 controls the backlight and A0 reads the battery for the Battery panel. An earlier note here said "both OFF" worked; that was wrong, and in that position the backlight was just always on. See `../hardware_info.md`.
 
 **Expect a quick flash at boot.** The display library turns the backlight on during init, and the firmware turns it straight back off.
 
@@ -188,7 +187,7 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 
 **Verified on hardware:** the camera, stream, snapshots and web page (before the round display was added).
 
-**Verified on hardware:** the round display lights and shows the preview, with both KE switches OFF. The colour fix (`PREVIEW_SWAP_BYTES = true`) and the 1-second touch lockout after "No" came after that test.
+**Verified on hardware:** the round display lights and shows the preview (first tested with the KE switches in the wrong position; see above). The colour fix (`PREVIEW_SWAP_BYTES = true`) and the 1-second touch lockout after "No" came after that test.
 
 **Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts, and snapshots land in `/photos/`.
 

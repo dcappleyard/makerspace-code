@@ -1,6 +1,7 @@
 #include "booth_config.h" // first, see screen.cpp
 
 #include "upload.h"
+#include "battery.h"
 #include "rtc_clock.h"
 #include "screen.h"
 #include "storage.h"
@@ -110,6 +111,7 @@ size_t uploadPending()
         sent++;
     }
 
+    pushBatteryLog(); // while WiFi is up anyway
     wifiDown();
     snprintf(line, sizeof(line), "%u of %u sent", (unsigned)sent, (unsigned)total);
     drawMessage(sent == total ? "Uploaded" : "Upload incomplete", line);
@@ -120,4 +122,82 @@ size_t uploadPending()
 #else
     return 0;
 #endif
+}
+
+#if UPLOAD_ENABLED
+namespace
+{
+
+// The `"length": N` in the server's battery responses; -1 if absent.
+long parseLength(const String &body)
+{
+    int i = body.indexOf("\"length\"");
+    if (i < 0)
+        return -1;
+    i = body.indexOf(':', i);
+    return i < 0 ? -1 : body.substring(i + 1).toInt();
+}
+
+} // namespace
+#endif
+
+bool pushBatteryLog()
+{
+#if UPLOAD_ENABLED
+    logBattery("upload");
+    String id = batteryLogId();
+    uint8_t *buf = id.isEmpty() ? nullptr : (uint8_t *)ps_malloc(BATTERY_UPLOAD_CHUNK);
+    bool done = false;
+    // The server appends idempotently by offset (X-Offset): a retried chunk's
+    // overlap is skipped, and a 409 says where it actually is.
+    for (int i = 0; buf && i < 32; i++)
+    {
+        size_t sent = batteryLogSent(), size = batteryLogSize();
+        if (sent >= size)
+        {
+            done = true;
+            break;
+        }
+        size_t n = readBatteryLog(sent, buf, std::min(BATTERY_UPLOAD_CHUNK, size - sent));
+        if (n == 0)
+            break;
+        HTTPClient http;
+        http.setTimeout(UPLOAD_HTTP_TIMEOUT_MS);
+        http.setConnectTimeout(UPLOAD_HTTP_TIMEOUT_MS);
+        if (!http.begin(String(SERVER_URL) + "/sources/" + UPLOAD_SOURCE + "/battery"))
+            break;
+        http.addHeader("X-Access-Token", UPLOAD_TOKEN);
+        http.addHeader("X-Log-Id", id);
+        http.addHeader("X-Offset", String((unsigned long)sent));
+        http.addHeader("Content-Type", "text/csv");
+        int code = http.POST(buf, n);
+        String body = code > 0 ? http.getString() : HTTPClient::errorToString(code);
+        http.end();
+        long length = parseLength(body);
+        Serial.printf("Battery log %s: %u bytes at %u -> %d %s\n", id.c_str(), (unsigned)n, (unsigned)sent, code,
+                      body.c_str());
+        if ((code == 200 || code == 409) && length >= 0)
+            setBatteryLogSent((size_t)length);
+        else
+            break; // server down or refusing: try again next push
+    }
+    free(buf);
+    markBatteryLogPushed();
+    return done;
+#else
+    return false;
+#endif
+}
+
+void pushBatteryLogSession()
+{
+#if UPLOAD_ENABLED
+    if (wifiUp())
+    {
+        syncClockOnline(); // keeps the RTC honest while we're online anyway
+        pushBatteryLog();
+    }
+    wifiDown();
+#endif
+    markBatteryLogPushed();
 }

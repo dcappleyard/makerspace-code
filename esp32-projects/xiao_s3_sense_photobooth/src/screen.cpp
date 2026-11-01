@@ -19,6 +19,8 @@
 #include <esp_sleep.h>
 #include <img_converters.h>
 
+#include <algorithm>
+
 namespace
 {
 
@@ -63,6 +65,26 @@ uint8_t pickScale(int w, int h, esp_jpeg_image_scale_t &scale)
     if (shortSide / 2 >= SCREEN_SIZE)
         return scale = JPG_SCALE_2X, 2;
     return scale = JPG_SCALE_NONE, 1;
+}
+
+// In place, on the decoded RGB565 buffer: a vertical flip swaps rows, a
+// horizontal one reverses each row. A few hundred microseconds at 320x240.
+void flipImage(uint16_t *px, int w, int h, bool flipH, bool flipV)
+{
+    if (flipV)
+    {
+        for (int top = 0, bottom = h - 1; top < bottom; top++, bottom--)
+        {
+            uint16_t *a = px + (size_t)top * w, *b = px + (size_t)bottom * w;
+            for (int x = 0; x < w; x++)
+                std::swap(a[x], b[x]);
+        }
+    }
+    if (flipH)
+    {
+        for (int y = 0; y < h; y++)
+            std::reverse(px + (size_t)y * w, px + (size_t)y * w + w);
+    }
 }
 
 } // namespace
@@ -157,7 +179,7 @@ bool readTouchPoint(int &x, int &y)
 
 void touchLockout() { lockoutFromMs = millis(); }
 
-void sleepUntilTouch()
+bool sleepUntilTouch(uint32_t maxMs)
 {
     // Don't go down with a finger still on the glass (it'd wake at once).
     uint32_t start = millis();
@@ -174,23 +196,33 @@ void sleepUntilTouch()
         gpio_hold_en((gpio_num_t)pin);
     gpio_wakeup_enable((gpio_num_t)TOUCH_INT_PIN, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
+    if (maxMs)
+        esp_sleep_enable_timer_wakeup((uint64_t)maxMs * 1000ULL);
     Serial.flush();
 
     esp_light_sleep_start();
+    bool touched = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
 
     gpio_wakeup_disable((gpio_num_t)TOUCH_INT_PIN);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    if (maxMs)
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     for (int pin : {BACKLIGHT_PIN, SD_CS, ROUND_SD_CS})
         gpio_hold_dis((gpio_num_t)pin);
     attachTouchIrq();
     touchIrq = false;
-    lastTouchReportMs = millis();
-    pendingWakeTap = true;
+    if (touched)
+    {
+        lastTouchReportMs = millis();
+        pendingWakeTap = true;
+    }
+    return touched;
 }
 
 // --- Drawing -------------------------------------------------------------------
 
-bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small)
+bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small,
+              bool flipH, bool flipV)
 {
     esp_jpeg_image_scale_t scale;
     uint8_t div = pickScale(width, height, scale);
@@ -209,6 +241,8 @@ bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char 
     }
     if (!jpg2rgb565(jpg, len, rgb, scale))
         return false;
+    if (flipH || flipV)
+        flipImage((uint16_t *)rgb, w, h, flipH, flipV);
     // Centre-crop: a negative offset, the sprite clips.
     frame.pushImage((SCREEN_SIZE - w) / 2, (SCREEN_SIZE - h) / 2, w, h, (uint16_t *)rgb);
     if (big)

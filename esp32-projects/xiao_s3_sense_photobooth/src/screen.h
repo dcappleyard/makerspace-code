@@ -30,15 +30,18 @@ bool takeTap();
 bool readTouchPoint(int &x, int &y);
 // Starts a TOUCH_LOCKOUT_MS window: call on every screen change.
 void touchLockout();
-// Light sleep until the touch INT goes low. Returns after waking, with the
-// touch that woke it counted as a tap (takeTap() returns true once).
-void sleepUntilTouch();
+// Light sleep until the touch INT goes low or `maxMs` passes (0 = no limit).
+// Returns true for a touch, which then counts as a tap (takeTap() returns true
+// once); false for the timer.
+bool sleepUntilTouch(uint32_t maxMs = 0);
 
 // --- Drawing -------------------------------------------------------------------
 // Decodes a JPEG at the cheapest scale that still covers the circle,
 // centre-crops it into the sprite and pushes it. `big` is drawn huge in the
 // middle (countdown), `small` near the bottom (e.g. "A"); either may be null.
-bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small);
+// flipH / flipV mirror the decoded image (screen only).
+bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small,
+              bool flipH = false, bool flipV = false);
 // "Capture?" with Yes (left half) / No (right half), over the last frame.
 void drawPrompt(const char *question);
 void flashWhite();

@@ -19,3 +19,10 @@
 size_t pendingUploads();
 // Uploads what it can within UPLOAD_BUDGET_MS; returns how many were sent.
 size_t uploadPending();
+
+// With WiFi already up: sends the battery log's unsent bytes to
+// POST /sources/<id>/battery (see battery.h). True when it's all sent.
+bool pushBatteryLog();
+// Brings WiFi up just to push the battery log, then down again (screen off;
+// used while asleep every BATTERY_UPLOAD_INTERVAL_S).
+void pushBatteryLogSession();

@@ -71,9 +71,9 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
 - Switches:
   - **KE**: a 2-position DIP switch, marked "ON KE" on one edge and "1 2" on the other. One switch routes GPIO43 to the backlight, the other routes battery voltage to A0 (Seeed: "2-bit Switch to control the screen backlight and battery voltage readout").
     - Seeed doesn't say which number is which, or which physical side its "ON" means.
-    - On our unit, the backlight works with **both switches OFF** (away from the printed "ON"); with both toward "ON" it stayed completely unlit. That's the opposite of the wiki's wording ("ON side" enables backlight control), so don't trust the printed ON.
-    - Not yet confirmed: whether GPIO43 really switches the backlight in this position, or it's simply always on. Check that no glow remains after "Yes" turns the screen off.
-    - Both switches can sit on the same side, since nothing here uses A0.
+    - **Corrected (2026-10-31):** the earlier "both OFF works" note was wrong. In that position the backlight was simply always on, not under GPIO control, and A0 didn't see the battery.
+    - With the photobooth in its case, both switches are now in the position Seeed's wiki calls ON: GPIO43 controls the backlight, and A0 reads the battery.
+    - The symptom of the backlight switch being in the other position is a panel that stays dark, or stays lit, whatever the firmware does.
   - The **power** switch cuts battery power. It's bypassed when the board is powered over USB.
 - Battery: the LiPo connector feeds the XIAO's own charger; charging happens over the XIAO's USB-C.
   - **Voltage:** on A0 (GPIO1) through a divider, routed by the KE switch. Seeed doesn't publish the ratio; its example thresholds (1850 mV empty, "1850 ~ 2100" in a comment, though its full `#define` says 2450) fit 1:2 for a 3.7-4.2 V cell.

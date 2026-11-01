@@ -1,5 +1,6 @@
 #include "booth_config.h"
 
+#include "battery.h"
 #include "booth.h"
 #include "rtc_clock.h"
 #include "screen.h"
@@ -18,6 +19,7 @@ void setup()
     setupScreen(); // before mountSd() (shared SPI bus) and setupClock() (starts Wire)
     setupClock();  // RTC, plus a one-off NTP sync if secrets.h has WiFi; WiFi is off afterwards
     mountSd();
+    setupBattery(); // after setupClock(), so the "boot" row has the time
     setupBooth();
 }
 

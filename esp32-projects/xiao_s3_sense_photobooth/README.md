@@ -12,8 +12,8 @@ A battery-friendly photo booth on the **XIAO ESP32-S3 Sense** with the **1.28" r
 | **Live view** | The camera feed on the round screen. After **30 s** with no touch, it goes back to sleep. |
 | **Tap** | Asks **"Capture?"**: **Yes** on the left half, **No** on the right. |
 | **No, or no answer in 3 s** | Back to the live view. |
-| **Yes** | Three shots, **A**, **B** and **C**. For each one:<br>- a **3..2..1** countdown over the live view, 1 s per number<br>- a white **flash** at capture<br>- the photo is shown for **3 s** |
-| **After C** | Back to the live view. |
+| **Yes** | One shot (`SHOTS_PER_SEQUENCE`; set it higher for A/B/C):<br>- a **3..2..1** countdown over the live view, 1 s per number<br>- a white **flash** at capture<br>- the photo is shown for **3 s** |
+| **After the shot** | Back to the live view. |
 
 All of these timings are constants in `src/booth_config.h`: `LIVE_IDLE_SLEEP_MS`, `CONFIRM_TIMEOUT_MS`, `COUNTDOWN_FROM`, `COUNTDOWN_STEP_MS`, `FLASH_MS`, `REVIEW_MS` and `SHOTS_PER_SEQUENCE`.
 
@@ -62,7 +62,7 @@ Photo names need the time. The round display has a **PCF8563 RTC** with a coin c
 
 1. **Optional: copy `include/secrets.h.example` to `include/secrets.h`** and set `WIFI_SSID` / `WIFI_PASSWORD`, so the clock gets set from NTP at boot. To also upload photos, set `SERVER_URL` (use an IP, e.g. `http://192.168.30.10:8080`) and `UPLOAD_TOKEN` (the server's `sources:` `photobooth` `upload_token`). It's gitignored, and the build works without it.
 2. **Insert a FAT32 microSD card** in either slot: the Sense board's, or the round display's. The firmware creates `/photos/` itself.
-3. **Set the display's KE switches:** both OFF worked on our unit; see `../hardware_info.md`.
+3. **Set the display's KE switches** to Seeed's ON position, so the firmware controls the backlight and A0 reads the battery for the log; see `../hardware_info.md`.
 4. **Flash** from this folder:
    ```
    pio run -t upload && pio device monitor
@@ -87,6 +87,26 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 
 **Camera facing you:** if the camera faces the subject, like a selfie, you may want the live view mirrored. There's no setting for that yet.
 
+### Screen orientation
+
+- **Rotation:** `DISPLAY_ROTATION = 3` makes the GUI upright in the 3D-printed case.
+- **Live view:** `LIVE_FLIP_V = true` flips it vertically in software. Combined with the 180° rotation, that keeps it upright but mirrored left-right, like a mirror.
+- **Saved photos:** the flips only affect the screen. The photos themselves were already upright and correct, and are left alone.
+- **Review:** the photo shown after the shot uses `REVIEW_FLIP_H` / `REVIEW_FLIP_V` (both off). Turn one on if the review comes out upside down or mirrored.
+
+## Battery log
+
+The booth keeps a CSV log of the LiPo's voltage. A0 is read through the round display's divider, so the KE switch must route it, and the battery voltage is assumed to be 2 × A0.
+- **When a row is written:** at boot, wake, sleep and each upload, and every **5 minutes** while asleep (`BATTERY_LOG_INTERVAL_S`). For that reading the board wakes from light sleep on a timer, with the screen off; a touch still wakes the booth as normal.
+- **Where it's kept:** in the board's internal flash (LittleFS), so it survives the battery dying. Rows: `epoch,local_time,boot,uptime_s,event,a0_mv,battery_mv`.
+- **How it reaches the Pi:** new rows are pushed to the photo server's `POST /sources/photobooth/battery`.
+  - It goes with every photo upload, and on its own every **2 hours** (`BATTERY_UPLOAD_INTERVAL_S`; WiFi up for a few seconds, screen off), so a discharge run reports in even when nobody uses the booth.
+  - The server appends by byte offset, so retries never duplicate rows.
+  - Rows written after the last push before the battery died go up at the first push after it's recharged.
+- **Viewing:** on the server, the photobooth source's page has a **Battery logs** panel with a voltage chart, a CSV download and Delete.
+- **Clearing:** flashing a build with a different `BATTERY_LOG_GENERATION` starts a fresh log under a new id, and wipes the old one from the booth's flash. The server keeps old logs until you delete them there.
+- **Push cost:** about 0.3 mAh per push, so ~4 mAh/day at the 2-hour interval. Raise the interval once you've got your curves.
+
 ## WiFi upload
 
 When the booth goes to sleep (30 s after the last tap, or immediately on the existing sleep path), the camera is already off and the screen still on. If any photos are pending, it:
@@ -101,20 +121,18 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
 
 ## Verified vs. unverified
 
-**Verified on hardware:** the live view, prompt and three-shot sequence run. Then these changes were made, and are built but not yet run:
-- display rotated 90° clockwise (`DISPLAY_ROTATION = 1`)
-- 1 s countdown steps, 3 s review
-- capture reordered for a shorter flash
+**Verified on hardware:** the live view, prompt and shot sequence, with the 1 s countdown, 3 s review and the reordered (shorter) flash. The booth runs in its case on a 1000 mAh LiPo.
+
+**Not yet confirmed on hardware:** the upload. That covers photos moving to `/photos/uploaded/`, a retry after the server was down, and no-SD RAM shots.
+
+**Built, not yet run on hardware (2026-10-31):**
+- the GUI rotated 180° (`DISPLAY_ROTATION = 3`), the mirrored live view (`LIVE_FLIP_V`), and the review orientation
+- a single shot per "Yes"
+- the battery log: timer wakes, the server push, and the fresh-log clear
 
 **Verified on hardware:** the two-slot SD mount. A 16 GB FAT32 card in the round display's slot mounts at 20 MHz, and photos land in `/photos/`.
 
-**Builds:** clean with and without `secrets.h`. Without it: 16.3% flash. With upload enabled: 37.5% flash (1,254,030 of 3,342,336 bytes) and 19.5% RAM.
-
-**Not yet tested on hardware:** the upload.
-- photos uploading at sleep
-- files moving to `/photos/uploaded/`
-- server down, then a retry at the next sleep
-- no-SD RAM shots uploading
+**Builds:** clean with and without `secrets.h`. Without it: 17.9% flash. With upload enabled: 39.6% flash (1,322,094 of 3,342,336 bytes) and 19.6% RAM.
 
 **What's carried over:** these are copied from `../xiao_s3_sense_webcam`, where they work on hardware:
 - the camera
@@ -132,7 +150,7 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
   - the countdown numbers are readable over the image
   - the flash is visible and not too long
   - each review shows the right photo
-  - three files `…_A/_B/_C.jpg` land on the card at full size and look properly exposed
+  - one file `<date_time>.jpg` lands on the card at full size and looks properly exposed
 - **No card:** the review says "no SD card". Insert a card, let it sleep, tap again: the photos move to `/photos/`.
 - **Idle:** the live view goes to sleep after 30 s.
-- **Power:** ideally, measure the current asleep vs. in live view. The webcam's battery logger can't run here (no web page), so use a USB power meter, or a discharge test with a fixed number of wakes.
+- **Battery log:** a `Battery log: started fresh log …` line at boot. Within 2 hours of going to sleep, `Battery log <id>: … -> 200` on the serial monitor (or the server's log), and the chart appears on the server's photobooth page.
