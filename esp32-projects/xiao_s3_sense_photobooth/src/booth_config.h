@@ -102,6 +102,19 @@ constexpr uint8_t COUNTDOWN_FROM = 3;            // 3..2..1
 constexpr uint32_t COUNTDOWN_STEP_MS = 1000;     // per number
 constexpr uint32_t FLASH_MS = 250;               // full-white flash at capture (minimum: it also covers one full-size frame)
 constexpr uint32_t REVIEW_MS = 3000;             // each captured photo is shown this long
+constexpr uint32_t SETUP_TIMEOUT_MS = 20000;     // Setup screen with no touch -> back to live view
+
+// Exposure compensation (the sensor's auto-exposure target, ae_level), set
+// from the Setup screen and kept in NVS. -1 tames the blown-out highlights
+// seen in the case. Only acts while auto exposure is on (the default).
+constexpr int EXPOSURE_COMP_DEFAULT = -1;
+constexpr int EXPOSURE_COMP_MIN = -2;
+constexpr int EXPOSURE_COMP_MAX = 2;
+
+// After any boot (power-on, RST, or Setup -> Reboot) the booth stays awake --
+// screen and camera off, no light sleep -- this long, so the USB port is there
+// for an upload even if the cable goes in after the reboot.
+constexpr uint32_t BOOT_STAY_AWAKE_MS = 60000;
 
 // -----------------------------------------------------------------------------
 // Camera modes. Live view runs small so decoding keeps up; each capture

@@ -16,7 +16,9 @@ enum class State
 {
     Asleep,
     Live,
-    Confirm,
+    Confirm,      // "Capture?" Yes / No / Setup
+    Setup,        // exposure, Done, Reboot -- over the live view
+    ConfirmReboot,
 };
 State state = State::Asleep;
 uint32_t stateSinceMs = 0;
@@ -189,7 +191,56 @@ void runSequence()
 
 // Asleep, but with a computer on USB: stay awake (screen and camera off) so
 // the serial port and uploads keep working -- see STAY_AWAKE_ON_USB_HOST.
-bool stayAwake() { return STAY_AWAKE_ON_USB_HOST && HWCDC::isPlugged(); }
+// Also for the first BOOT_STAY_AWAKE_MS after any boot, so a Setup -> Reboot
+// leaves the port up long enough to plug in and start an upload.
+bool stayAwake() { return millis() < BOOT_STAY_AWAKE_MS || (STAY_AWAKE_ON_USB_HOST && HWCDC::isPlugged()); }
+
+// The point of the tap that takeTap() just reported. The finger is still down,
+// so a point is there to read; give the controller a moment if the first
+// read comes back empty.
+bool tapPoint(int &x, int &y)
+{
+    for (int i = 0; i < 10; i++)
+    {
+        if (readTouchPoint(x, y))
+            return true;
+        delay(5);
+    }
+    return false;
+}
+
+void showCapturePrompt()
+{
+    // Best guess so far; see BATTERY_PERCENT_MV in booth_config.h.
+    int pct = batteryPercentEstimate();
+    char bat[16];
+    snprintf(bat, sizeof(bat), "Bat: %d%%", pct);
+    drawPrompt("Capture?", pct >= 0 ? bat : nullptr, true);
+}
+
+void goSetup()
+{
+    lastInteractionMs = millis();
+    setSetupOverlay(true, exposureComp());
+    drawSetupNow();
+    enter(State::Setup);
+}
+
+void leaveSetup()
+{
+    setSetupOverlay(false, 0);
+    goLive();
+}
+
+void reboot()
+{
+    drawMessage("Rebooting...");
+    logBattery("reboot");
+    Serial.println("Rebooting (Setup -> Reboot)");
+    Serial.flush();
+    delay(500);
+    ESP.restart();
+}
 
 } // namespace
 
@@ -225,11 +276,7 @@ void serviceBooth()
     case State::Live:
         if (takeTap())
         {
-            // Best guess so far; see BATTERY_PERCENT_MV in booth_config.h.
-            int pct = batteryPercentEstimate();
-            char bat[16];
-            snprintf(bat, sizeof(bat), "Bat: %d%%", pct);
-            drawPrompt("Capture?", pct >= 0 ? bat : nullptr);
+            showCapturePrompt();
             enter(State::Confirm);
         }
         else if ((uint32_t)(now - lastInteractionMs) > LIVE_IDLE_SLEEP_MS)
@@ -245,21 +292,90 @@ void serviceBooth()
     case State::Confirm:
         if (takeTap())
         {
-            // The finger is still down, so a point is there to read; give the
-            // controller a moment if the first read comes back empty.
             int x = 0, y = 0;
-            bool got = false;
-            for (int i = 0; i < 10 && !(got = readTouchPoint(x, y)); i++)
-                delay(5);
-            if (!got)
+            if (!tapPoint(x, y))
                 break;
-            if (x < 120)
+            switch (promptHitAt(x, y, true))
+            {
+            case PromptHit::Yes:
                 runSequence();
-            goLive();
+                goLive();
+                break;
+            case PromptHit::No:
+                goLive();
+                break;
+            case PromptHit::Setup:
+                goSetup();
+                break;
+            default:
+                break; // the gap between Yes/No and Setup: ignored
+            }
         }
         else if ((uint32_t)(now - stateSinceMs) > CONFIRM_TIMEOUT_MS)
         {
             goLive();
+        }
+        else
+        {
+            delay(10);
+        }
+        break;
+
+    case State::Setup:
+        if (takeTap())
+        {
+            int x = 0, y = 0;
+            if (!tapPoint(x, y))
+                break;
+            lastInteractionMs = now;
+            switch (setupHitAt(x, y))
+            {
+            case SetupHit::Minus:
+            case SetupHit::Plus:
+            {
+                int ev = exposureComp() + (setupHitAt(x, y) == SetupHit::Plus ? 1 : -1);
+                setExposureComp(ev);
+                setSetupOverlay(true, exposureComp());
+                drawSetupNow();
+                Serial.printf("Exposure compensation %+d\n", exposureComp());
+                break;
+            }
+            case SetupHit::Done:
+                leaveSetup();
+                break;
+            case SetupHit::Reboot:
+                drawPrompt("Reboot?", "Plug in USB first to flash", false);
+                enter(State::ConfirmReboot);
+                break;
+            default:
+                break;
+            }
+        }
+        else if ((uint32_t)(now - lastInteractionMs) > SETUP_TIMEOUT_MS)
+        {
+            leaveSetup();
+        }
+        else if (!liveFrame(nullptr, nullptr)) // carries the Setup overlay
+        {
+            delay(10);
+        }
+        break;
+
+    case State::ConfirmReboot:
+        if (takeTap())
+        {
+            int x = 0, y = 0;
+            if (!tapPoint(x, y))
+                break;
+            PromptHit hit = promptHitAt(x, y, false);
+            if (hit == PromptHit::Yes)
+                reboot();
+            else if (hit == PromptHit::No)
+                goSetup();
+        }
+        else if ((uint32_t)(now - stateSinceMs) > CONFIRM_TIMEOUT_MS)
+        {
+            goSetup();
         }
         else
         {

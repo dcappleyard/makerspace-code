@@ -179,14 +179,15 @@ bool cameraInit()
         maxSize = config.frame_size;
 
     // Per-sensor tweaks from the core's CameraWebServer example: the OV3660
-    // module comes up upside down and washed out.
+    // module comes up upside down and washed out. Its brightness +1 is left
+    // out here: the booth's photos were already coming out blown out.
     if (s->id.PID == OV3660_PID)
     {
         s->set_vflip(s, 1);
-        s->set_brightness(s, 1);
         s->set_saturation(s, -2);
     }
     applySaved(s);
+    s->set_ae_level(s, exposureComp()); // the booth's own setting wins over the webcam's
     if (CAMERA_ROTATE_180)
     {
         // Relative to whatever is set now, so it stacks on the OV3660 tweak
@@ -232,4 +233,28 @@ void cameraLiveMode()
 {
     if (ready)
         setMode(LIVE_FRAMESIZE, LIVE_QUALITY);
+}
+
+int exposureComp()
+{
+    Preferences prefs;
+    if (!prefs.begin("booth", true))
+        return EXPOSURE_COMP_DEFAULT;
+    int ev = prefs.getInt("ev", EXPOSURE_COMP_DEFAULT);
+    prefs.end();
+    return constrain(ev, EXPOSURE_COMP_MIN, EXPOSURE_COMP_MAX);
+}
+
+void setExposureComp(int ev)
+{
+    ev = constrain(ev, EXPOSURE_COMP_MIN, EXPOSURE_COMP_MAX);
+    Preferences prefs;
+    prefs.begin("booth", false);
+    prefs.putInt("ev", ev);
+    prefs.end();
+    if (ready)
+    {
+        sensor_t *s = esp_camera_sensor_get();
+        s->set_ae_level(s, ev);
+    }
 }

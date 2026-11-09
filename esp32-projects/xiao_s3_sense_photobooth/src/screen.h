@@ -42,9 +42,36 @@ bool sleepUntilTouch(uint32_t maxMs = 0);
 // flipH / flipV mirror the decoded image (screen only).
 bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small,
               bool flipH = false, bool flipV = false);
-// "Capture?" with Yes (left half) / No (right half), over the last frame,
-// and an optional small line under the buttons (e.g. "Bat: 73%").
-void drawPrompt(const char *question, const char *footer = nullptr);
+// A question with Yes (left) / No (right) over the last frame, an optional
+// small line under the buttons (e.g. "Bat: 73%"), and optionally a Setup
+// button set well below them so it's hard to hit by accident.
+void drawPrompt(const char *question, const char *footer = nullptr, bool withSetup = false);
+
+enum class PromptHit
+{
+    None,
+    Yes,
+    No,
+    Setup,
+};
+PromptHit promptHitAt(int x, int y, bool withSetup);
+
+// Setup screen, drawn over the live view (so exposure changes show as you
+// make them): exposure - / value / +, Done, and Reboot at the bottom. While
+// it's on, every drawJpeg() frame carries it; drawSetupNow() redraws it over
+// the last frame straight away.
+void setSetupOverlay(bool on, int ev);
+void drawSetupNow();
+
+enum class SetupHit
+{
+    None,
+    Minus,
+    Plus,
+    Done,
+    Reboot,
+};
+SetupHit setupHitAt(int x, int y);
 void flashWhite();
 void blankScreen(); // black, straight to the panel (ends the flash)
 void drawMessage(const char *line1, const char *line2 = nullptr);

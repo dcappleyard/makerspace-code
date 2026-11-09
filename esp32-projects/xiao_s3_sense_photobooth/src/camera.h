@@ -25,6 +25,11 @@ framesize_t maxFramesize(); // the size captures use
 // cover one fresh frame. cameraLiveMode() switches back.
 void cameraCaptureMode();
 void cameraLiveMode();
+
+// Exposure compensation, EXPOSURE_COMP_MIN..MAX (the sensor's ae_level). Saved
+// in NVS; applied at every init and immediately if the camera is on.
+int exposureComp();
+void setExposureComp(int ev);
 // A frame, after dropping `discardFirst` queued ones (with CAMERA_GRAB_LATEST
 // the queued frame may predate whatever just changed, e.g. the flash). Hand it
 // back with esp_camera_fb_return(). nullptr on failure.

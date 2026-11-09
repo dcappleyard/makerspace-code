@@ -10,7 +10,7 @@ A battery-friendly photo booth on the **XIAO ESP32-S3 Sense** with the **1.28" r
 |---|---|
 | **Asleep** | Screen off, camera off, WiFi off, CPU in light sleep. **Tap the screen** to wake. |
 | **Live view** | The camera feed on the round screen. After **30 s** with no touch, it goes back to sleep. |
-| **Tap** | Asks **"Capture?"**: **Yes** on the left half, **No** on the right. |
+| **Tap** | Asks **"Capture?"**: **Yes** on the left half, **No** on the right, and a **Setup** button set well below them (see [Setup screen](#setup-screen)). |
 | **No, or no answer in 3 s** | Back to the live view. |
 | **Yes** | One shot (`SHOTS_PER_SEQUENCE`; set it higher for A/B/C):<br>- a **3..2..1** countdown over the live view, 1 s per number<br>- a white **flash** at capture<br>- the photo is shown for **3 s** |
 | **After the shot** | Back to the live view. |
@@ -57,6 +57,7 @@ Photo names need the time. The round display has a **PCF8563 RTC** with a coin c
   - Deep sleep isn't used: GPIO44 can't wake it, because only GPIO0–21 can.
 - **The camera sensor itself stays powered.** The Sense board has no power-down line, so the sensor is unclocked but not off. SD cards also keep some idle current. Measure before counting on a number.
 - **With a computer on USB** (`STAY_AWAKE_ON_USB_HOST`), "asleep" means screen and camera off but the CPU awake. Light sleep would drop the USB serial port, which breaks uploads and the serial monitor. On battery or a power-only charger it really light-sleeps.
+- **For the first 60 s after any boot** (`BOOT_STAY_AWAKE_MS`), it also stays awake, so an upload can start even if the USB cable goes in just after a reboot.
 
 ## Setup
 
@@ -86,6 +87,22 @@ lib/driver/driver.h  Seeed_GFX screen selection (BOARD_SCREEN_COMBO 501 = round 
 **Camera settings:** image settings (exposure, white balance, mirror/flip, and so on) come from NVS, using the same keys `../xiao_s3_sense_webcam` saves from its web page. To tune them, flash the webcam, adjust in the browser, then flash the booth back; the settings carry over.
 
 **Camera facing you:** if the camera faces the subject, like a selfie, you may want the live view mirrored. There's no setting for that yet.
+
+### Setup screen
+
+Tap **Setup** on the Capture? prompt. The controls are drawn over the live view, so you can see changes as you make them. With no touch for 20 s (`SETUP_TIMEOUT_MS`), it returns to the live view.
+- **Exposure − / +:** exposure compensation from −2 to +2, the sensor's auto-exposure target (`ae_level`).
+  - It defaults to **−1** (`EXPOSURE_COMP_DEFAULT`), to tame blown-out highlights.
+  - It's saved in NVS and applies to the live view and the photos. It only acts while auto exposure is on, which is the default.
+- **Done:** back to the live view.
+- **Reboot:** asks "Reboot?" first, then restarts the chip in software, the same as pressing RST.
+
+**To flash new firmware without unplugging the battery:**
+1. Plug in USB-C.
+2. Open **Setup → Reboot → Yes**.
+3. Run `pio run -t upload` within a minute.
+
+Light sleep makes the USB port disappear. After a reboot, the booth stays awake for 60 s, and indefinitely while a computer is attached, so the port stays up for the upload.
 
 ### Screen orientation
 
@@ -127,6 +144,8 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
 **Verified on hardware:** the live view, prompt and shot sequence, with the 1 s countdown, 3 s review and the reordered (shorter) flash. The booth runs in its case on a 1000 mAh LiPo.
 
 **Not yet confirmed on hardware:** the upload. That covers photos moving to `/photos/uploaded/`, a retry after the server was down, and no-SD RAM shots.
+
+**Built, not yet run on hardware (2026-11-09):** the Setup button on the prompt; the Setup screen (exposure −2..+2 defaulting to −1, Done, Reboot with confirm); the 60 s stay-awake after boot; and dropping the OV3660 `brightness +1` tweak (from Espressif's example), which was adding to the blown-out exposures.
 
 **Built, not yet run on hardware (2026-10-31):**
 - the GUI rotated 180° (`DISPLAY_ROTATION = 3`)

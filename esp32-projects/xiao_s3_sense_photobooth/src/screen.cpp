@@ -41,6 +41,10 @@ uint32_t lastTouchReportMs = 0;
 uint32_t lockoutFromMs = 0;
 bool pendingWakeTap = false;
 
+// Setup overlay state (see setSetupOverlay()).
+bool setupOn = false;
+int setupEv = 0;
+
 void IRAM_ATTR onTouchInt() { touchIrq = true; }
 
 void attachTouchIrq()
@@ -221,6 +225,8 @@ bool sleepUntilTouch(uint32_t maxMs)
 
 // --- Drawing -------------------------------------------------------------------
 
+static void drawSetupControls(); // below, with the rest of the Setup layout
+
 bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char *big, const char *small,
               bool flipH, bool flipV)
 {
@@ -266,28 +272,107 @@ bool drawJpeg(const uint8_t *jpg, size_t len, int width, int height, const char 
         frame.setTextColor(TFT_WHITE);
         frame.drawString(small, SCREEN_SIZE / 2, 201, 4);
     }
+    if (setupOn)
+        drawSetupControls();
     frame.pushSprite(0, 0);
     return true;
 }
 
-void drawPrompt(const char *question, const char *footer)
+// --- Prompt and Setup layout ----------------------------------------------------
+// All geometry lives here, next to the hit tests, so drawing and touch agree.
+// The panel is round: everything sits inside the circle.
+//
+// Prompt: question y=62; Yes / No buttons y 82-142; footer y=158; Setup
+// button y 182-214, a 40 px gap below Yes/No.
+// Setup:  title y=50; exposure - [value] + y 90-140; Done y 150-184; Reboot
+// y 200-228 (smallest, at the bottom, and it asks to confirm).
+
+static void button(int x, int y, int w, int h, uint16_t color, const char *label, uint8_t font)
 {
-    // Over the last live frame (still in the sprite): a dark band with the
-    // question and two halves, Yes left / No right, plus the footer line.
-    frame.fillRect(0, 60, SCREEN_SIZE, footer ? 150 : 122, TFT_BLACK);
+    frame.fillRoundRect(x, y, w, h, 10, color);
     frame.setTextDatum(MC_DATUM);
     frame.setTextColor(TFT_WHITE);
-    frame.drawString(question, SCREEN_SIZE / 2, 82, 4);
-    frame.fillRoundRect(24, 104, 92, 64, 12, TFT_DARKGREEN);
-    frame.fillRoundRect(124, 104, 92, 64, 12, TFT_DARKGREY);
-    frame.drawString("Yes", 70, 136, 4);
-    frame.drawString("No", 170, 136, 4);
+    frame.drawString(label, x + w / 2, y + h / 2 + 1, font);
+}
+
+void drawPrompt(const char *question, const char *footer, bool withSetup)
+{
+    // Over the last live frame (still in the sprite): a dark band behind it all.
+    frame.fillRect(0, 40, SCREEN_SIZE, withSetup ? 190 : (footer ? 135 : 115), TFT_BLACK);
+    frame.setTextDatum(MC_DATUM);
+    frame.setTextColor(TFT_WHITE);
+    frame.drawString(question, SCREEN_SIZE / 2, 62, 4);
+    button(24, 82, 92, 60, TFT_DARKGREEN, "Yes", 4);
+    button(124, 82, 92, 60, TFT_DARKGREY, "No", 4);
     if (footer)
     {
+        frame.setTextDatum(MC_DATUM);
         frame.setTextColor(TFT_LIGHTGREY);
-        frame.drawString(footer, SCREEN_SIZE / 2, 192, 2);
+        frame.drawString(footer, SCREEN_SIZE / 2, 158, 2);
     }
+    if (withSetup)
+        button(72, 182, 96, 32, TFT_NAVY, "Setup", 4);
     frame.pushSprite(0, 0);
+}
+
+PromptHit promptHitAt(int x, int y, bool withSetup)
+{
+    if (y >= 70 && y < 162)
+        return x < SCREEN_SIZE / 2 ? PromptHit::Yes : PromptHit::No;
+    if (withSetup && y >= 170 && x >= 50 && x <= 190)
+        return PromptHit::Setup;
+    return PromptHit::None; // the gap between them: ignored
+}
+
+static void drawSetupControls()
+{
+    frame.fillRoundRect(60, 34, 120, 32, 10, TFT_BLACK);
+    frame.setTextDatum(MC_DATUM);
+    frame.setTextColor(TFT_WHITE);
+    frame.drawString("Setup", SCREEN_SIZE / 2, 51, 4);
+
+    frame.fillRoundRect(84, 76, 72, 16, 6, TFT_BLACK);
+    frame.setTextColor(TFT_LIGHTGREY);
+    frame.drawString("Exposure", SCREEN_SIZE / 2, 84, 2);
+    button(28, 96, 58, 44, TFT_DARKGREY, "-", 4);
+    button(154, 96, 58, 44, TFT_DARKGREY, "+", 4);
+    char ev[8];
+    snprintf(ev, sizeof(ev), setupEv > 0 ? "+%d" : "%d", setupEv);
+    frame.fillRoundRect(92, 96, 56, 44, 10, TFT_BLACK);
+    frame.setTextColor(TFT_WHITE);
+    frame.drawString(ev, SCREEN_SIZE / 2, 119, 4);
+
+    button(70, 150, 100, 34, TFT_DARKGREEN, "Done", 4);
+    button(80, 200, 80, 28, TFT_MAROON, "Reboot", 2);
+}
+
+void setSetupOverlay(bool on, int ev)
+{
+    setupOn = on;
+    setupEv = ev;
+}
+
+void drawSetupNow()
+{
+    drawSetupControls();
+    frame.pushSprite(0, 0);
+}
+
+SetupHit setupHitAt(int x, int y)
+{
+    if (y >= 88 && y < 146)
+    {
+        if (x < 90)
+            return SetupHit::Minus;
+        if (x > 150)
+            return SetupHit::Plus;
+        return SetupHit::None;
+    }
+    if (y >= 146 && y < 192 && x >= 50 && x <= 190)
+        return SetupHit::Done;
+    if (y >= 196 && x >= 66 && x <= 174)
+        return SetupHit::Reboot;
+    return SetupHit::None;
 }
 
 void flashWhite() { tft.fillScreen(TFT_WHITE); }
