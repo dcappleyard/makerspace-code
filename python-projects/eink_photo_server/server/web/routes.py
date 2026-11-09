@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 from .. import config as cfg
 from .. import battery, db, photos, pipelines, prepare, sidecar, sources, testcards
 from ..pipelines.base import NEUTRAL_TUNING, TUNING_KEYS, load_oriented
-from .common import back, device_or_404, require_admin, templates
+from .common import FormError, back, device_or_404, require_admin, templates
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -206,6 +206,17 @@ def preview(device_id: str, photo_id: int, kind: str):
 @router.post("/ui/photo/{photo_id}/delete")
 def photo_delete(request: Request, photo_id: int):
     photos.delete(photo_id)
+    return back(request)
+
+
+@router.post("/ui/photos/delete")
+def photos_delete(request: Request, photo_id: list[int] = Form([])):
+    """Bulk delete from a source page's selection (e.g. clearing out photobooth
+    junk). Folder-source files are removed from the folder too."""
+    if not photo_id:
+        raise FormError("nothing selected")
+    for pid in photo_id:
+        photos.delete(pid)
     return back(request)
 
 

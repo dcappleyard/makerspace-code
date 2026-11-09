@@ -1,8 +1,20 @@
 {# Photo cards for a source page. Needs: photos, metas, in_playlists, devices,
    all_playlists, fields, labels, tuning_keys, json. #}
+{% if photos %}
+<form id="bulk" method="post" action="/ui/photos/delete"
+      onsubmit="return confirm('Delete ' + pickedCount() + ' photo(s)? Photos from a folder source (e.g. the photobooth) are deleted from its folder too. This can\'t be undone.')"></form>
+<div class="row bulkbar">
+  <label><input type="checkbox" id="pick-all" onchange="pickAll(this.checked)"> Select all {{ photos|length }}</label>
+  <span id="pick-count" class="muted">0 selected</span>
+  <button form="bulk" id="pick-delete" disabled>Delete selected</button>
+  <button type="button" onclick="pickAll(false)">Clear</button>
+  <span class="muted">Shift-click to select a range.</span>
+</div>
+{% endif %}
 <div class="grid">
 {% for p in photos %}{% set m = metas[p.id] %}
   <div class="card">
+    <label class="pick"><input type="checkbox" form="bulk" name="photo_id" value="{{ p.id }}" onclick="picked(event, this)"> select</label>
     <form method="post" action="/ui/photo/{{ p.id }}/focal" class="focal" onclick="setFocal(event, this)">
       <img src="/ui/thumb/{{ p.id }}" alt="{{ p.filename }}">
       <span class="dot" style="left:{{ p.focal_x * 100 }}%; top:{{ p.focal_y * 100 }}%"></span>
@@ -52,6 +64,32 @@
 {% else %}<p class="muted">No photos here yet.</p>{% endfor %}
 </div>
 <script>
+function pickBoxes() { return [...document.querySelectorAll('input[name=photo_id][form=bulk]')]; }
+function pickedCount() { return pickBoxes().filter(b => b.checked).length; }
+function pickUpdate() {
+  const boxes = pickBoxes(), n = pickedCount();
+  boxes.forEach(b => b.closest('.card').classList.toggle('picked', b.checked));
+  const count = document.getElementById('pick-count'), del = document.getElementById('pick-delete'), all = document.getElementById('pick-all');
+  if (!count) return;
+  count.textContent = n + ' selected';
+  del.disabled = n === 0;
+  del.textContent = n ? 'Delete ' + n + ' selected' : 'Delete selected';
+  all.checked = n > 0 && n === boxes.length;
+  all.indeterminate = n > 0 && n < boxes.length;
+}
+function pickAll(on) { pickBoxes().forEach(b => b.checked = on); pickUpdate(); }
+let lastPick = null;
+function picked(ev, box) {
+  const boxes = pickBoxes();
+  if (ev.shiftKey && lastPick !== null) {      // range: everything between the last click and this one
+    const [a, b] = [boxes.indexOf(lastPick), boxes.indexOf(box)].sort((x, y) => x - y);
+    boxes.slice(a, b + 1).forEach(x => x.checked = box.checked);
+  }
+  lastPick = box;
+  pickUpdate();
+}
+// Browsers can restore checked boxes on back/forward; count them on load.
+window.addEventListener('pageshow', pickUpdate);
 function setFocal(ev, form) {
   const r = form.querySelector("img").getBoundingClientRect();
   form.x.value = ((ev.clientX - r.left) / r.width).toFixed(3);
