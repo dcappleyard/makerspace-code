@@ -27,16 +27,21 @@
     {% if m.tags %}<div class="row">{% for t in m.tags %}<a href="?tag={{ t|urlencode }}" class="chip">{{ t }}</a>{% endfor %}</div>{% endif %}
     {% if p.id in in_playlists %}<div class="muted">In: {% for pid, name in in_playlists[p.id] %}<a href="/playlist/{{ pid }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
 
-    {% if all_playlists %}
+    {% set in_ids = (in_playlists.get(p.id) or [])|map(attribute=0)|list %}
+    {% set addable = all_playlists|rejectattr("id", "in", in_ids)|list %}
+    {% if addable %}
     <form method="post" action="" class="row" onsubmit="this.action='/ui/playlist/'+this.pl.value+'/add'">
       <input type="hidden" name="photo_id" value="{{ p.id }}">
-      <select name="pl">{% for pl in all_playlists %}<option value="{{ pl.id }}">{{ pl.name }}</option>{% endfor %}</select>
-      <button>Add to playlist</button>
+      <span class="ctl">Playlist</span>
+      <select name="pl">{% for pl in addable %}<option value="{{ pl.id }}">{{ pl.name }}</option>{% endfor %}</select>
+      <button>Add</button>
     </form>
+    {% elif all_playlists %}<div class="muted">In every playlist.</div>
     {% endif %}
     {% if devices %}
     <form method="post" action="" class="row" onsubmit="this.action='/ui/device/'+this.dev.value+'/queue'">
       <input type="hidden" name="photo_id" value="{{ p.id }}">
+      <span class="ctl">Frame</span>
       <select name="dev">{% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
       <button title="Serve on that frame's next pull only">Show next</button>
       <button type="button" onclick="window.open('/ui/preview/'+this.form.dev.value+'/{{ p.id }}/sim', '_blank')"
