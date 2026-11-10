@@ -1,2 +1,5 @@
 # Runtime data: personal photos, cache, db, and devices.yaml (holds tokens).
 data/
+
+# Local copy of the Pi's devices.yaml (tokens) for frame_tool
+eink_data_copy/

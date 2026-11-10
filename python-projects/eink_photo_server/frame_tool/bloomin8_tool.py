@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bloomin8 frame tool: probe status and (re)arm pull mode for every Bloomin8
-frame in a devices.yaml -- a small Tk window, or the command line.
+frame in a devices.yaml -- a small local web page, or the command line.
 
 Runs on a machine that can reach the frames' network (on this setup, the Mac;
 the Pi can't reach the IoT VLAN). Reads the server's devices.yaml -- keep a copy
@@ -14,7 +14,7 @@ on the Mac -- using two optional keys the server itself ignores:
         frame_ip: 192.168.20.219              # add this per Bloomin8 frame
         # server_url: ...                     # optional per-frame override
 
-    .venv/bin/python bloomin8_tool.py [--devices path/to/devices.yaml]    # window
+    .venv/bin/python bloomin8_tool.py [--devices path/to/devices.yaml]    # opens a page in the browser
     .venv/bin/python bloomin8_tool.py status [frame-id ...]               # command line
     .venv/bin/python bloomin8_tool.py pull <frame-id> [...]
 
@@ -32,9 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import queue
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -206,128 +204,148 @@ def cli(args, frames: list[Frame]) -> int:
     return rc
 
 
-# --- window ---------------------------------------------------------------------
+# --- window (a local web page: the macOS system Tk draws blank windows) ---------
 
-def gui(devices_path: Path | None) -> None:
-    import tkinter as tk
-    from tkinter import filedialog, ttk
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Bloomin8 frames</title>
+<style>
+ body{font:14px -apple-system,system-ui,sans-serif;margin:16px;color:#222;background:#fff}
+ table{border-collapse:collapse;margin:8px 0}th,td{padding:4px 10px;text-align:left;border-bottom:1px solid #ddd}
+ th{background:#f3f3f3}td.err{color:#b00}.muted{color:#777}button{margin-right:6px}
+ #log{font:12px Menlo,monospace;background:#f7f7f7;padding:8px;white-space:pre-wrap;min-height:6em}
+ input.path{width:32em}
+</style></head><body>
+<h2>Bloomin8 frames</h2>
+<form onsubmit="openFile();return false">devices.yaml: <input class="path" id="path"> <button>Load</button></form>
+<table><thead><tr><th><input type="checkbox" id="all" onchange="document.querySelectorAll('.pick').forEach(b=>b.checked=this.checked)"></th>
+<th>Frame</th><th>IP</th><th>Battery</th><th>Mode</th><th>Pull</th><th>Next wake</th><th>Clock</th><th>Status</th></tr></thead>
+<tbody id="rows"></tbody></table>
+<p><button onclick="act('probe')">Probe</button><button onclick="act('pull')">Pull now</button>
+<label><input type="checkbox" id="single" checked> also switch to single-image mode</label>
+<span class="muted">(nothing ticked = all frames; wake a sleeping frame first -- Pull now waits up to 60 s)</span></p>
+<div id="log"></div>
+<script>
+let frames=[];
+const $=id=>document.getElementById(id);
+function log(lines){const l=$('log');lines.forEach(x=>l.textContent+=new Date().toLocaleTimeString()+'  '+x+'\\n');}
+function row(f){
+  let tr=$('r-'+f.id);
+  if(!tr){tr=document.createElement('tr');tr.id='r-'+f.id;$('rows').appendChild(tr);}
+  const s=f.st||{}, was=tr.querySelector('.pick')?.checked?' checked':'';
+  tr.innerHTML=`<td><input type="checkbox" class="pick" value="${f.id}"${was}></td><td>${f.name}</td><td>${f.ip||'(no frame_ip)'}</td>`+
+   `<td>${s.battery??''}${s.battery!=null?'%':''}</td><td>${s.mode??''}</td><td>${'pull' in s?(s.pull?'on':'OFF'):''}</td>`+
+   `<td>${s.next_text??''}</td><td>${s.skew_text??''}</td><td class="${s.error?'err':''}">${f.status||s.error||''}</td>`;
+}
+async function api(path,body){const r=await fetch(path,{method:'POST',body:JSON.stringify(body||{})});return r.json();}
+async function load(){const d=await api('/api/frames');$('path').value=d.path||'';$('rows').innerHTML='';frames=d.frames;
+  frames.forEach(row);log(d.messages);if(frames.length)act('probe',frames.map(f=>f.id));}
+async function openFile(){const d=await api('/api/open',{path:$('path').value});log(d.messages);if(d.ok)load();}
+function chosen(){const t=[...document.querySelectorAll('.pick:checked')].map(b=>b.value);return t.length?t:frames.map(f=>f.id);}
+async function act(what,ids){
+  ids=ids||chosen();
+  await Promise.all(ids.map(async id=>{
+    const f=frames.find(x=>x.id==id);f.status=what=='pull'?'arming pull (waits up to 60 s)…':'probing…';row(f);
+    const d=await api('/api/'+what,{id,single:$('single').checked});
+    f.st=d.st;f.status=d.status;row(f);log(d.messages||[]);
+  }));
+}
+load();
+</script></body></html>"""
 
-    root = tk.Tk()
-    root.title("Bloomin8 frames")
-    events: queue.Queue = queue.Queue()
-    state = {"path": devices_path, "frames": []}
 
-    top = ttk.Frame(root, padding=8)
-    top.pack(fill="x")
-    path_var = tk.StringVar()
-    ttk.Label(top, text="devices.yaml:").pack(side="left")
-    ttk.Label(top, textvariable=path_var, foreground="#555").pack(side="left", padx=6)
+def _state(st: dict) -> dict:
+    out = dict(st)
+    if "next" in st:
+        out["next_text"] = local(st["next"]) if st["next"] else "—"
+    if "skew" in st:
+        out["skew_text"] = skew_text(st["skew"])
+    return out
 
-    cols = ("frame", "ip", "battery", "mode", "pull", "next", "clock", "status")
-    heads = ("Frame", "IP", "Battery", "Mode", "Pull", "Next wake", "Clock", "Status")
-    widths = (150, 120, 60, 90, 60, 100, 70, 260)
-    tree = ttk.Treeview(root, columns=cols, show="headings", height=6, selectmode="extended")
-    for c, h, w in zip(cols, heads, widths):
-        tree.heading(c, text=h)
-        tree.column(c, width=w, anchor="w")
-    tree.pack(fill="both", expand=True, padx=8)
 
-    btns = ttk.Frame(root, padding=8)
-    btns.pack(fill="x")
-    single = tk.BooleanVar(value=True)
-    logbox = tk.Text(root, height=8, width=110, state="disabled", font=("Menlo", 11))
-    logbox.pack(fill="both", padx=8, pady=(0, 8))
+def gui(devices_path: Path | None, port: int = 0) -> None:
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    def log(msg):
-        events.put(("log", f"{datetime.now():%H:%M:%S}  {msg}"))
+    state = {"path": devices_path}
 
-    def selected() -> list[Frame]:
-        ids = tree.selection() or tree.get_children()   # nothing selected = all
-        return [f for f in state["frames"] if f.id in ids]
-
-    def set_row(f: Frame, st: dict | None = None, status: str = ""):
-        st = st or {}
-        values = (f.name, f.ip or "(no frame_ip)",
-                  f"{st['battery']}%" if st.get("battery") is not None else "",
-                  st.get("mode", "") or "", ("on" if st.get("pull") else "OFF") if "pull" in st else "",
-                  local(st.get("next")) if st.get("next") else "", skew_text(st.get("skew")) if "skew" in st else "",
-                  status or st.get("error", ""))
-        events.put(("row", f.id, values))
-
-    def load(path: Path | None):
-        state["path"] = path
-        tree.delete(*tree.get_children())
-        state["frames"] = []
-        if not path or not path.exists():
-            path_var.set("(none -- click Open…)")
-            return
+    def frames() -> tuple[list[Frame], list[str]]:
+        p = state["path"]
+        if not p or not p.exists():
+            return [], ["no devices.yaml -- enter its path above and Load"]
         try:
-            state["frames"] = load_frames(path)
+            fs = load_frames(p)
         except Exception as e:  # malformed yaml, missing keys
-            log(f"can't read {path}: {e}")
-        path_var.set(str(path))
-        remember_devices_file(path)
-        for f in state["frames"]:
-            tree.insert("", "end", iid=f.id, values=(f.name, f.ip or "(no frame_ip)", "", "", "", "", "", ""))
-        if not state["frames"]:
-            log("no Bloomin8 frames (protocol: bloomin8) in that file")
-        elif any(not f.server_url for f in state["frames"]):
-            log("add a top-level server_url: to devices.yaml (the server as frames reach it)")
+            return [], [f"can't read {p}: {e}"]
+        msgs = []
+        if not fs:
+            msgs.append("no Bloomin8 frames (protocol: bloomin8) in that file")
+        elif any(not f.server_url for f in fs):
+            msgs.append("add a top-level server_url: to devices.yaml (the server as frames reach it)")
+        return fs, msgs
 
-    def run(job, frames):
-        def worker():
-            for f in frames:
-                job(f)
-        threading.Thread(target=worker, daemon=True).start()
+    def handle(path: str, body: dict) -> dict:
+        if path == "/api/open":
+            p = Path(str(body.get("path", ""))).expanduser()
+            if not p.exists():
+                return {"ok": False, "messages": [f"not found: {p}"]}
+            state["path"] = p
+            remember_devices_file(p)
+            return {"ok": True, "messages": [f"loaded {p}"]}
+        fs, msgs = frames()
+        if path == "/api/frames":
+            return {"path": str(state["path"] or ""), "messages": msgs,
+                    "frames": [{"id": f.id, "name": f.name, "ip": f.ip} for f in fs]}
+        f = next((x for x in fs if x.id == body.get("id")), None)
+        if not f:
+            return {"st": {"error": "unknown frame"}, "status": ""}
+        if path == "/api/probe":
+            st = probe(f)
+            return {"st": _state(st), "status": "" if "error" in st else f"checked {datetime.now():%H:%M:%S}"}
+        if path == "/api/pull":
+            lines: list[str] = []
+            ok = pull_now(f, single_image=bool(body.get("single", True)), log=lines.append)
+            return {"st": _state(probe(f)), "messages": lines,
+                    "status": f"armed -- pulls in ~{PULL_LEAD_S}s" if ok else "pull NOT armed (see log)"}
+        return {"error": "unknown"}
 
-    def do_probe(f: Frame):
-        set_row(f, status="probing…")
-        st = probe(f)
-        set_row(f, st, "" if "error" in st else f"checked {datetime.now():%H:%M:%S}")
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code: int, ctype: str, data: bytes):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
-    def do_pull(f: Frame):
-        set_row(f, status="arming pull…")
-        ok = pull_now(f, single_image=single.get(), log=log)
-        st = probe(f)
-        set_row(f, st, "armed -- pulls in ~90s" if ok else "pull NOT armed (see log)")
+        def do_GET(self):
+            if self.path in ("/", "/index.html"):
+                self._send(200, "text/html; charset=utf-8", PAGE.encode())
+            else:
+                self._send(404, "text/plain", b"not found")
 
-    def choose_file():
-        p = filedialog.askopenfilename(title="devices.yaml", filetypes=[("YAML", "*.yaml *.yml"), ("All", "*")])
-        if p:
-            load(Path(p))
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                body = {}
+            self._send(200, "application/json", json.dumps(handle(self.path, body)).encode())
 
-    ttk.Button(top, text="Open…", command=choose_file).pack(side="right")
-    ttk.Button(top, text="Reload", command=lambda: load(state["path"])).pack(side="right", padx=4)
-    ttk.Button(btns, text="Probe", command=lambda: run(do_probe, selected())).pack(side="left")
-    ttk.Button(btns, text="Pull now", command=lambda: run(do_pull, selected())).pack(side="left", padx=6)
-    ttk.Checkbutton(btns, text="also switch to single-image mode", variable=single).pack(side="left", padx=6)
-    ttk.Label(btns, text="(no selection = all frames; wake a sleeping frame first)", foreground="#777").pack(side="left")
-
-    def pump():
-        try:
-            while True:
-                ev = events.get_nowait()
-                if ev[0] == "log":
-                    logbox.configure(state="normal")
-                    logbox.insert("end", ev[1] + "\n")
-                    logbox.see("end")
-                    logbox.configure(state="disabled")
-                elif ev[0] == "row" and tree.exists(ev[1]):
-                    tree.item(ev[1], values=ev[2])
-        except queue.Empty:
+        def log_message(self, *a):  # keep the terminal quiet
             pass
-        root.after(150, pump)
 
-    load(devices_path)
-    pump()
-    if state["frames"]:
-        run(do_probe, state["frames"])   # quick look at start-up
-    root.mainloop()
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    print(f"Bloomin8 frames: {url}  (Ctrl-C to quit)")
+    webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--devices", help="path to devices.yaml (remembered once used)")
+    ap.add_argument("--port", type=int, default=0, help="port for the page (default: any free one)")
     sub = ap.add_subparsers(dest="cmd")
     p_status = sub.add_parser("status", help="probe frames (default: all)")
     p_status.add_argument("ids", nargs="*")
@@ -338,7 +356,7 @@ def main():
 
     path = find_devices_file(args.devices)
     if not args.cmd:
-        gui(path)
+        gui(path, args.port)
         return
     if not path or not path.exists():
         sys.exit("no devices.yaml found -- pass --devices path/to/devices.yaml")

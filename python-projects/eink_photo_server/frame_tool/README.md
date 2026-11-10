@@ -1,6 +1,6 @@
 # frame_tool
 
-`bloomin8_tool.py` is a small window (or command line) for the Bloomin8 frames
+`bloomin8_tool.py` is a small local web page (or command line) for the Bloomin8 frames
 listed in the server's `devices.yaml`. It can:
 
 - **Probe** each frame: battery, play mode, whether pull is on and to where, the
@@ -21,8 +21,9 @@ the Mac; the Pi can't reach the IoT VLAN.
 
 ## Setup (Mac)
 
-The window needs Tk. macOS's `/usr/bin/python3` has Tk; the PlatformIO
-`python3` on `PATH` doesn't. So build a venv from `/usr/bin/python3`:
+The only dependency is PyYAML. The page is served by the standard library and
+opens in your browser; it's not a Tk window, because the macOS system Tk draws
+blank windows. Any Python 3.9+ works; this uses `/usr/bin/python3`:
 
 ```bash
 cd python-projects/eink_photo_server/frame_tool && /usr/bin/python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -49,11 +50,13 @@ Give each frame a fixed IP in UniFi so `frame_ip` stays right.
 .venv/bin/python bloomin8_tool.py --devices ~/eink-data-copy/devices.yaml
 ```
 
-The file is remembered after the first run, in `~/.bloomin8_tool.json`; use
-**Open…** in the window to switch files.
+This opens the page in your browser, served on `127.0.0.1` only (`--port` to
+pick the port); Ctrl-C in the terminal stops it. The file is remembered after
+the first run, in `~/.bloomin8_tool.json`; to switch files, edit the path at
+the top of the page and click **Load**.
 
-- **Selecting frames:** select rows for **Probe** / **Pull now**. With nothing
-  selected, they act on every frame.
+- **Selecting frames:** tick rows for **Probe** / **Pull now**. With nothing
+  ticked, they act on every frame.
 - **Sleeping frames:** wake a sleeping frame first (its button or the Bloomin8
   app). **Pull now** waits up to 60 s for it to answer.
 
