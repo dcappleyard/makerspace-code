@@ -1,0 +1,5 @@
+# Copy to config.yaml (git-ignored) and set the real host.
+wled:
+  host: wled-sculpture.local   # mDNS name or IP of the Dig-Uno
+  ddp_port: 4048
+  fps: 40
