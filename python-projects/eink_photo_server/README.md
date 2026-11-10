@@ -290,6 +290,8 @@ curl -H 'X-Access-Token: CHANGE_ME_TOKEN' 'http://localhost:8080/eink_pull?devic
 ```
 
 ### Pointing a Bloomin8 at the server
+**From the Mac: `frame_tool/bloomin8_tool.py`.** It's a small window (or command line) that reads your `devices.yaml`: add `server_url` and each frame's `frame_ip`, which the server ignores. **Probe** shows each Bloomin8's state, including clock skew. **Pull now** arms pull mode with a pull ~90 s ahead on the frame's own clock and switches the frame to single-image mode. It's the recovery tool when a frame drops out of pull mode, and the quickest way to set up a new one. See [frame_tool/README.md](frame_tool/README.md).
+
 Wake the frame so it's reachable, then:
 ```bash
 python -m server.tools.configure_frame living_room_73 <frame-ip> --server http://<pi-ip>:8080

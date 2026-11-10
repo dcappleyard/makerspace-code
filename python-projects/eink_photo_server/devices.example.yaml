@@ -1,6 +1,9 @@
 # Copy to <DATA_DIR>/devices.yaml (./data/devices.yaml with docker compose).
 # Static per-device config; runtime state (playlist, battery, ...) lives in db.sqlite.
 timezone: America/Chicago
+# Optional, read only by frame_tool/bloomin8_tool.py (the server ignores it):
+# the server as the frames reach it.
+server_url: http://192.168.1.10:8080
 
 devices:
   - id: living_room_73          # our name for the frame; used in URLs/UI
@@ -18,6 +21,7 @@ devices:
     token: CHANGE_ME_TOKEN
     # Path secret in image URLs (the frame may not send the header for the download).
     image_secret: CHANGE_ME_IMAGE_SECRET
+    frame_ip: 192.168.20.219        # for frame_tool only: the frame's (fixed) IP
     # Default schedule, used until you add blocks on the frame's tab: play the
     # playlist every interval_minutes during wake_hours, sleep outside them.
     interval_minutes: 120
