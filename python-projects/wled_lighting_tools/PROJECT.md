@@ -145,7 +145,7 @@ wled_lighting_tools/
   shows/              one module per show
   runner.py           scheduler + rotation + streaming loop
   testpattern.py      bench/test CLI
-  preview/            simulator (DDP receiver + browser view)
+  preview/            server.py (DDP receiver + HTTP/SSE) + index.html (canvas 3D view)
   systemd/            wled-show-runner.service
 ```
 
@@ -154,6 +154,7 @@ wled_lighting_tools/
 1. **Bench tools:** DDP sender, WLED JSON client, test-pattern CLI. Confirm color order, string order, and brightness behavior on the real hardware.
    *Status:* built (`wled/`, `testpattern.py`); packet format and the 40 fps rate verified against a local UDP listener. **Not yet run on the sculpture** — see README "Bench check".
 2. **Pixel map + simulator:** approximate `pixels.csv` from the sculpture description; preview renders shows and receives DDP.
+   *Status:* `pixel_map.py` and `preview/` (stdlib DDP receiver + SSE → canvas 3D view) built and checked with `testpattern.py` at ~40 fps. Rendering shows directly (without DDP) waits for the show framework in milestone 3; the runner can stream to the preview instead.
 3. **Shows:** show interface, loader, and a first handful of shows designed for the sculpture's shape.
 4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, systemd unit.
 5. **Optional:** FastAPI web UI for picking a show and editing the schedule.

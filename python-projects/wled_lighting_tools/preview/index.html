@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sculpture Preview</title>
+<style>
+  :root {
+    --bg: #07080b;
+    --panel: rgba(20, 22, 28, 0.86);
+    --text: #d7dae0;
+    --muted: #8a909c;
+    --line: #2a2e38;
+    --live: #3ccf6e;
+    --idle: #e0a23a;
+    --off: #6b7180;
+    --accent: #6aa8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  .bar { position: fixed; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: center; pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  #top { top: 12px; }
+  #bottom { bottom: 12px; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; display: flex; gap: 8px; align-items: center; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); }
+  .live .dot { background: var(--live); box-shadow: 0 0 8px var(--live); }
+  .idle .dot { background: var(--idle); }
+  .muted { color: var(--muted); }
+  button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  input[type=range] { width: 110px; accent-color: var(--accent); }
+  #tip { position: fixed; pointer-events: none; display: none; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  #tip .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    vertical-align: -1px; margin-right: 4px; border: 1px solid var(--line); }
+  @media (max-width: 600px) { .hide-narrow { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="bar" id="top">
+  <div class="chip" id="status"><span class="dot"></span><span id="statusText">connecting…</span></div>
+  <div class="chip muted hide-narrow" id="stats"></div>
+</div>
+
+<div class="bar" id="bottom">
+  <div class="chip">
+    <span class="muted">View</span>
+    <button data-view="front">Front</button>
+    <button data-view="iso">3/4</button>
+    <button data-view="top">Top</button>
+    <button id="spin">Spin</button>
+  </div>
+  <div class="chip">
+    <button id="structure" class="on">Structure</button>
+    <button id="unlit" class="on">Unlit bulbs</button>
+  </div>
+  <div class="chip">
+    <span class="muted">Exposure</span>
+    <input id="exposure" type="range" min="0.5" max="4" step="0.1" value="1.2">
+  </div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+"use strict";
+const REALTIME_TIMEOUT = 2.5;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const tip = document.getElementById("tip");
+
+let pixels = [], colors = new Uint8Array(0), structure = { rings: [], stems: [], rod: null };
+let live = false, connected = false;
+const cam = { az: 0.6, el: 0.35, zoom: 1, spin: false };
+const opts = { structure: true, unlit: true, exposure: 1.2 };
+let zc = 0, extent = 1, projected = [], hover = -1;
+
+// ---------------------------------------------------------------- geometry
+function buildStructure() {
+  const groups = new Map();
+  for (const p of pixels) {
+    if (p.part !== "ring") continue;
+    const k = p.output + ":" + p.base_pair;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  const rings = [], stems = [];
+  for (const ring of groups.values()) {
+    // evenly spaced ring lights average to the ring's center
+    const c = ring.reduce((a, p) => [a[0] + p.x / ring.length, a[1] + p.y / ring.length, p.z], [0, 0, 0]);
+    const r = Math.hypot(ring[0].x - c[0], ring[0].y - c[1]);
+    rings.push({ c, r });
+    const d = Math.hypot(c[0], c[1]);
+    const ux = c[0] / d, uy = c[1] / d;
+    stems.push([[0, 0, c[2]], [c[0] - ux * r, c[1] - uy * r, c[2]]]);
+  }
+  const zs = pixels.map(p => p.z);
+  const ztop = Math.max(...zs) + 3;
+  structure = { rings, stems, rod: [[0, 0, 0], [0, 0, ztop]] };
+  zc = ztop / 2;                       // frame ground (z=0) to the top of the rod
+  const rmax = Math.max(...pixels.map(p => Math.hypot(p.x, p.y)));
+  extent = Math.max(ztop, 2 * rmax) * 1.25;
+}
+
+// ---------------------------------------------------------------- camera
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+const D = 160; // camera distance, inches
+function project(x, y, z) {
+  const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
+  const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+  const x1 = x * ca + y * sa, y1 = -x * sa + y * ca, zz = z - zc;
+  const up = zz * ce + y1 * se;
+  const depth = y1 * ce - zz * se;
+  const base = Math.min(W, H * 0.92) / extent * cam.zoom;
+  const s = base * D / (D + depth);
+  return [W / 2 + x1 * s, H * 0.46 - up * s, depth, s];   // nudged up, clear of the bottom toolbar
+}
+
+// ---------------------------------------------------------------- drawing
+function line3(a, b) {
+  const p = project(...a), q = project(...b);
+  ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]);
+}
+
+function draw() {
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#07080b";
+  ctx.fillRect(0, 0, W, H);
+
+  // ground ring + +x marker
+  ctx.strokeStyle = "rgba(120,130,150,0.18)"; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i <= 64; i++) {
+    const a = i / 64 * 2 * Math.PI, p = project(16 * Math.cos(a), 16 * Math.sin(a), 0);
+    i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]);
+  }
+  ctx.stroke();
+  ctx.beginPath(); line3([0, 0, 0], [20, 0, 0]); ctx.stroke();
+  const xl = project(22, 0, 0);
+  ctx.fillStyle = "rgba(140,150,170,0.6)"; ctx.font = "11px sans-serif"; ctx.fillText("+x", xl[0] - 6, xl[1] + 4);
+
+  if (opts.structure) {
+    ctx.strokeStyle = "rgba(150,160,180,0.22)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    line3(...structure.rod);
+    for (const s of structure.stems) line3(...s);
+    for (const { c, r } of structure.rings) {
+      for (let i = 0; i <= 40; i++) {
+        const a = i / 40 * 2 * Math.PI;
+        const p = project(c[0] + r * Math.cos(a), c[1] + r * Math.sin(a), c[2]);
+        i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]);
+      }
+    }
+    ctx.stroke();
+  }
+
+  projected = pixels.map((p, i) => { const q = project(p.x, p.y, p.z); return { i, x: q[0], y: q[1], d: q[2], s: q[3] }; });
+  const order = projected.slice().sort((a, b) => b.d - a.d);
+  const dim = live ? 1 : 0.35;
+  const ex = opts.exposure * dim;
+
+  // unlit bulbs first (opaque), then additive glow
+  for (const q of order) {
+    const r0 = Math.max(1.5, 0.28 * q.s);
+    const k = 3 * q.i;
+    const lit = colors[k] + colors[k + 1] + colors[k + 2] > 0;
+    if (!lit && opts.unlit) {
+      ctx.fillStyle = "#1c1f26"; ctx.strokeStyle = "#343946";
+      ctx.beginPath(); ctx.arc(q.x, q.y, r0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = "lighter";
+  for (const q of order) {
+    const k = 3 * q.i;
+    const r = Math.min(255, colors[k] * ex), g = Math.min(255, colors[k + 1] * ex), b = Math.min(255, colors[k + 2] * ex);
+    if (r + g + b < 1) continue;
+    const lum = Math.max(r, g, b) / 255;
+    const rg = Math.max(3, (0.5 + 0.9 * lum) * q.s);
+    const grad = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, rg);
+    grad.addColorStop(0, `rgba(${r},${g},${b},0.8)`);
+    grad.addColorStop(0.3, `rgba(${r},${g},${b},0.22)`);
+    grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(q.x, q.y, rg, 0, 2 * Math.PI); ctx.fill();
+    // hot core
+    const cr = Math.max(1.2, 0.22 * q.s);
+    ctx.fillStyle = `rgba(${Math.min(255, r + 90 * lum)},${Math.min(255, g + 90 * lum)},${Math.min(255, b + 90 * lum)},0.9)`;
+    ctx.beginPath(); ctx.arc(q.x, q.y, cr, 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.globalCompositeOperation = "source-over";
+
+  if (hover >= 0) {
+    const q = projected[hover];
+    ctx.strokeStyle = "#6aa8ff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(5, 0.6 * q.s), 0, 2 * Math.PI); ctx.stroke();
+  }
+}
+
+let last = performance.now();
+function tick(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (cam.spin) cam.az += dt * 0.35;
+  draw();
+  requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------- interaction
+let drag = null;
+canvas.addEventListener("pointerdown", e => {
+  drag = { x: e.clientX, y: e.clientY, az: cam.az, el: cam.el };
+  canvas.setPointerCapture(e.pointerId); canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointermove", e => {
+  if (drag) {
+    cam.az = drag.az - (e.clientX - drag.x) * 0.008;
+    cam.el = Math.max(-0.2, Math.min(Math.PI / 2 - 0.001, drag.el + (e.clientY - drag.y) * 0.008));
+    hideTip();
+    return;
+  }
+  pick(e.clientX, e.clientY);
+});
+canvas.addEventListener("pointerup", e => { drag = null; canvas.classList.remove("dragging"); });
+canvas.addEventListener("pointerleave", hideTip);
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.zoom = Math.max(0.4, Math.min(5, cam.zoom * Math.exp(-e.deltaY * 0.0015)));
+}, { passive: false });
+canvas.addEventListener("dblclick", () => setView("iso"));
+
+function pick(mx, my) {
+  let best = -1, bd = 14 * 14;
+  for (const q of projected) {
+    const d = (q.x - mx) ** 2 + (q.y - my) ** 2;
+    if (d < bd || (best >= 0 && d === bd && q.d < projected[best].d)) { bd = d; best = q.i; }
+  }
+  hover = best;
+  if (best < 0) return hideTip();
+  const p = pixels[best], k = 3 * best;
+  const rgb = [colors[k] || 0, colors[k + 1] || 0, colors[k + 2] || 0];
+  tip.innerHTML = `<span class="sw" style="background:rgb(${rgb})"></span>` +
+    `<b>#${p.index}</b> · output ${p.output} light ${p.light}<br>` +
+    `<span class="muted">${p.strand} · bp ${p.base_pair} · ${p.part} slot ${p.slot} · rgb(${rgb.join(", ")})</span>`;
+  tip.style.display = "block";
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(W - tw - 8, mx + 14) + "px";
+  tip.style.top = Math.max(8, my - th - 10) + "px";
+}
+function hideTip() { hover = -1; tip.style.display = "none"; }
+
+const VIEWS = { front: [0, 0.08], iso: [0.6, 0.35], top: [0, Math.PI / 2 - 0.001] };
+function setView(v) { [cam.az, cam.el] = VIEWS[v]; cam.zoom = 1; }
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => setView(b.dataset.view));
+function toggle(id, fn) {
+  const b = document.getElementById(id);
+  b.onclick = () => { b.classList.toggle("on"); fn(b.classList.contains("on")); };
+}
+toggle("spin", v => cam.spin = v);
+toggle("structure", v => opts.structure = v);
+toggle("unlit", v => opts.unlit = v);
+const exp = document.getElementById("exposure");
+exp.oninput = () => opts.exposure = parseFloat(exp.value);
+
+// ---------------------------------------------------------------- data
+const statusEl = document.getElementById("status"), statusText = document.getElementById("statusText");
+const statsEl = document.getElementById("stats");
+function showStatus(st) {
+  live = st.live;
+  statusEl.className = "chip " + (st.live ? "live" : "idle");
+  statusText.textContent = st.live
+    ? `receiving DDP from ${st.sender}`
+    : st.age == null ? "waiting for DDP on udp/4048"
+    : `idle ${st.age}s (the sculpture would be back on its WLED effect)`;
+  statsEl.textContent = `${st.fps} fps · ${st.frames} frames · ${st.seq_gaps} seq gaps`;
+}
+
+function connect() {
+  const es = new EventSource("/stream");
+  es.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.f) {
+      const bin = atob(m.f);
+      const a = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+      colors = a;
+    }
+    if (m.st) showStatus(m.st);
+  };
+  es.onerror = () => {
+    live = false;
+    statusEl.className = "chip";
+    statusText.textContent = "preview server not reachable — retrying…";
+  };
+}
+
+fetch("/pixels.json").then(r => r.json()).then(px => {
+  pixels = px;
+  colors = new Uint8Array(3 * px.length);
+  buildStructure();
+  resize();
+  window.addEventListener("resize", resize);
+  requestAnimationFrame(tick);
+  connect();
+});
+</script>
+</body>
+</html>
