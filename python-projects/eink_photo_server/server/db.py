@@ -115,6 +115,8 @@ MIGRATIONS = [
     ("schedule_blocks", "source", "TEXT"),
     ("schedule_blocks", "selection", "TEXT"),
     ("schedule_blocks", "hold", "INTEGER NOT NULL DEFAULT 0"),
+    ("device_state", "clock_offset_s", "INTEGER"),   # frame clock - real time; NULL = not learned
+    ("device_state", "clock_offset_at", "TEXT"),     # when it was last measured
 ]
 SCHEMA_VERSION = "2"
 EVENTS_KEEP = 5000  # per device

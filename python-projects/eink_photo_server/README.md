@@ -87,8 +87,14 @@ Precedence on each pull:
 
 ## Wake timing and the log
 - **What the frame reports:** with every pull it reports `cron_time`, the wake time it was given. The log records that next to the actual pull time, so you can see the **drift**. Each pull also logs the battery, the block, the reason, and the next wake target and time sent.
-- **Early wakes:** a scheduled pull that arrives up to 60 min *before* its target counts as that target. The frame gets that slot's photo, and the next wake is computed from the slot, so an early wake doesn't cause an extra refresh.
-- **Wake offset:** the wake time sent is the target + the **wake offset**. The **Wake timing** card shows the median drift over the last 10 scheduled pulls, and **Apply measured** sets the offset to cancel it. If the frame wakes 3 min early, the offset becomes +3 min, so a 07:00 block's image appears at about 07:00.
+- **Early wakes (ESP32 frames):** a scheduled pull that arrives up to 60 min *before* its target counts as that target. The frame gets that slot's photo, and the next wake is computed from the slot, so an early wake doesn't cause an extra refresh.
+- **Wake offset (ESP32 frames):** the wake time sent is the target + the **wake offset**. The **Wake timing** card shows the median drift over the last 10 scheduled pulls, and **Apply measured** sets the offset to cancel it. If the frame wakes 3 min early, the offset becomes +3 min, so a 07:00 block's image appears at about 07:00.
+- **Bloomin8 frames: adaptive clock.** A Bloomin8's clock can't be set, and one can be hours off. So the server sends its wake times **on the frame's own clock**, and the frame's tab has a **Frame clock** card instead of Wake timing:
+  - **Learning the offset.** The frame wakes when its clock reaches the `cron_time` it was sent, and reports that `cron_time`. So when a scheduled pull arrives, the frame's clock reads about `cron_time`, and *offset = cron_time − arrival*. Every scheduled pull updates it, so drift is corrected as it happens.
+  - **Readings it doesn't trust.** A reading far above the current offset is ignored, because it's usually a button or restart wake reporting an old wake time. The exception is a reading that arrives right after the previous pull: that means the wake time sent was already past by the frame's clock, so the offset was too low, and the reading is taken.
+  - **Teaching it.** frame_tool's **Pull now** schedules a wake on the frame's own clock, and the server learns the offset from that pull. The card can also **Set** an offset by hand (e.g. frame_tool's measured skew, in seconds) or **Forget** it.
+  - **Early pulls.** A scheduled pull more than 10 min before the next change (`schedule.EARLY_WINDOW`) gets a "no new image" reply (status 204) that re-aims the frame at the change: no download, no refresh. Within 10 min, it counts as the change and gets its photo. A pull armed elsewhere (Pull now, the app), a queued photo, or a retry always gets an image.
+  - **In the log**, the Scheduled column shows the clock reading (`clock +4h50m`) instead of drift, and the next wake shows the offset used.
 - **Log tools:** the log keeps the newest 5000 events per frame. It can be cleared, or downloaded as CSV, from the frame's tab.
 
 ## Battery overlay
@@ -160,7 +166,7 @@ The UI previews decode the `.bin` back to a PNG.
 - **`keep`:** the frame already shows the right image (it reports `current=<name>`), so it skips both the download and the panel refresh.
 - **`GET /esp32/v1/signal`:** confirms the display after the panel refresh.
 
-The schedule blocks, wake offset and log are the same as for the Bloomin8.
+The schedule blocks and log are the same as for the Bloomin8. ESP32 frames use the wake offset and the 60-min early-wake rule, not the Bloomin8's adaptive clock.
 
 ## Tuning
 These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. Per-photo tuning is global to the photo; there's no per-frame or per-playlist photo tuning. The pipeline applies them in this order:

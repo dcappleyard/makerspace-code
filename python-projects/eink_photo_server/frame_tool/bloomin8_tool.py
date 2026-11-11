@@ -121,6 +121,30 @@ def skew_text(seconds: float | None) -> str:
     return f"{sign}{s // 3600}h{s % 3600 // 60:02d}m" if s >= 3600 else f"{sign}{s // 60}m{s % 60:02d}s"
 
 
+def mask(d):
+    """Hide all but the last 4 chars of tokens, so the output is safe to paste."""
+    if isinstance(d, dict):
+        return {k: (f"…{str(v)[-4:]}" if k == "token" and v else mask(v)) for k, v in d.items()}
+    return d
+
+
+def probe_details(st: dict) -> list[str]:
+    """The requests a probe sent (as curl commands) and what came back."""
+    lines = []
+    for url, resp in (st.get("raw") or {}).items():
+        lines.append(f"$ curl -s {url}")
+        lines.append(json.dumps(mask(resp)) if resp is not None else f"  -> {st.get('error', 'no answer')}")
+    if st.get("frame_time"):
+        mac = time.time()
+        fmt = "%Y-%m-%d %H:%M:%S %Z"
+        lines.append(f"frame clock {datetime.fromtimestamp(st['frame_time']).astimezone():{fmt}}  "
+                     f"(UTC {datetime.fromtimestamp(st['frame_time'], timezone.utc):%H:%M:%S})")
+        lines.append(f"Mac clock   {datetime.fromtimestamp(mac).astimezone():{fmt}}  "
+                     f"(UTC {datetime.fromtimestamp(mac, timezone.utc):%H:%M:%S})  -> skew {skew_text(st['skew'])} "
+                     f"({st['skew']:+.0f} s)")
+    return lines
+
+
 def probe(frame: Frame, timeout: float = 4) -> dict:
     """Current state, or {'error': ...}. Doesn't change anything."""
     if not frame.ip:
@@ -130,9 +154,12 @@ def probe(frame: Frame, timeout: float = 4) -> dict:
         info = call("GET", f"{base}/deviceInfo", timeout=timeout)
         ps = call("GET", f"{base}/upstream/pull_settings", timeout=timeout)
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        return {"error": f"no answer ({getattr(e, 'reason', e)}) -- asleep, or wrong IP?"}
+        return {"error": f"no answer ({getattr(e, 'reason', e)}) -- asleep, or wrong IP?",
+                "raw": {f"{base}/deviceInfo": None}}
     frame_time = ps.get("time") or info.get("time")
+    raw = {f"{base}/deviceInfo": info, f"{base}/upstream/pull_settings": ps}
     return {
+        "raw": raw,
         "battery": info.get("battery"),
         "mode": PLAY_MODES.get(info.get("play_type"), info.get("play_type")),
         "play_type": info.get("play_type"),
@@ -182,6 +209,68 @@ def pull_now(frame: Frame, single_image: bool = True, log=print, wait_s: int = W
     return bool(ok)
 
 
+def pull_off(frame: Frame, log=print) -> dict:
+    """Turn pull mode off (keeping the URL and token) so the frame stops calling
+    the server; it keeps showing its current image. Pull now turns it back on."""
+    if not frame.ip:
+        log(f"{frame.id}: no frame_ip in devices.yaml")
+        return {"error": "no frame_ip in devices.yaml"}
+    st = probe(frame)
+    if "error" in st:
+        log(f"{frame.id}: {st['error']} -- wake it first")
+        return st
+    body = {"upstream_on": False, "upstream_url": st.get("url") or (frame.server_url or "").rstrip("/"),
+            "token": frame.token}
+    try:
+        call("PUT", f"http://{frame.ip}/upstream/pull_settings", body)
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        log(f"{frame.id}: request failed: {getattr(e, 'reason', e)}")
+        return probe(frame)
+    after = probe(frame)
+    if "error" not in after:
+        log(f"{frame.id}: pull {'OFF -- it will stop calling the server' if not after['pull'] else 'still ON (check the log)'}")
+    return after
+
+
+def reboot(frame: Frame, log=print, wait_s: int = 120) -> dict:
+    """POST /reboot (a restart is when the frame is most likely to resync its
+    clock), then wait for it to come back and return a fresh probe."""
+    if not frame.ip:
+        log(f"{frame.id}: no frame_ip in devices.yaml")
+        return {"error": "no frame_ip in devices.yaml"}
+    before = probe(frame)
+    if "error" in before:
+        log(f"{frame.id}: {before['error']} -- wake it first")
+        return before
+    try:
+        call("POST", f"http://{frame.ip}/reboot", timeout=6)
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        log(f"{frame.id}: reboot request: {getattr(e, 'reason', e)} (it may have dropped the connection while restarting)")
+    log(f"{frame.id}: reboot sent (clock was {skew_text(before['skew'])}); watching for it to go down")
+    t0 = time.time()
+    went_down = False
+    while time.time() - t0 < 45:              # a real restart drops it off the network
+        time.sleep(1)
+        if "error" in probe(frame, timeout=2):
+            went_down = True
+            break
+    if not went_down:
+        log(f"{frame.id}: still answering after 45 s -- it did NOT reboot (ignored the command?)")
+        return probe(frame)
+    log(f"{frame.id}: went down after {time.time() - t0:.0f}s; waiting up to {wait_s}s for it to come back")
+    deadline = time.time() + wait_s
+    st = probe(frame)
+    while "error" in st and time.time() < deadline:
+        time.sleep(3)
+        st = probe(frame)
+    if "error" in st:
+        log(f"{frame.id}: didn't come back within {wait_s}s -- it may have gone to sleep; probe it later")
+    else:
+        log(f"{frame.id}: back up after {time.time() - t0:.0f}s -- clock {skew_text(before['skew'])} -> "
+            f"{skew_text(st['skew'])} ({before['skew']:+.0f} s -> {st['skew']:+.0f} s)")
+    return st
+
+
 # --- command line ---------------------------------------------------------------
 
 def cli(args, frames: list[Frame]) -> int:
@@ -199,6 +288,14 @@ def cli(args, frames: list[Frame]) -> int:
                 print(f"{f.id:20} {f.ip:16} battery {st['battery']}%  {st['mode']}  pull "
                       f"{'ON' if st['pull'] else 'OFF'} -> {st['url'] or '-'}  next {local(st['next'])}  "
                       f"clock {skew_text(st['skew'])}")
+            if args.verbose:
+                print("\n".join("    " + x for x in probe_details(st)) + "\n")
+        elif args.cmd == "off":
+            st = pull_off(f)
+            rc |= 1 if "error" in st or st.get("pull") else 0
+        elif args.cmd == "reboot":
+            st = reboot(f)
+            rc |= 1 if "error" in st else 0
         else:
             rc |= 0 if pull_now(f, single_image=not args.keep_local_playback) else 1
     return rc
@@ -219,7 +316,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Bloomin8 frame
 <table><thead><tr><th><input type="checkbox" id="all" onchange="document.querySelectorAll('.pick').forEach(b=>b.checked=this.checked)"></th>
 <th>Frame</th><th>IP</th><th>Battery</th><th>Mode</th><th>Pull</th><th>Next wake</th><th>Clock</th><th>Status</th></tr></thead>
 <tbody id="rows"></tbody></table>
-<p><button onclick="act('probe')">Probe</button><button onclick="act('pull')">Pull now</button>
+<p><button onclick="act('probe')">Probe</button><button onclick="act('pull')">Pull now</button><button onclick="if(confirm('Turn pull OFF on the selected frame(s)? They keep their current image until Pull now. (nothing ticked = all)'))act('off')">Pull off</button><button onclick="if(confirm('Reboot the selected frame(s)? (nothing ticked = all)'))act('reboot')">Reboot</button>
 <label><input type="checkbox" id="single" checked> also switch to single-image mode</label>
 <span class="muted">(nothing ticked = all frames; wake a sleeping frame first -- Pull now waits up to 60 s)</span></p>
 <div id="log"></div>
@@ -243,7 +340,7 @@ function chosen(){const t=[...document.querySelectorAll('.pick:checked')].map(b=
 async function act(what,ids){
   ids=ids||chosen();
   await Promise.all(ids.map(async id=>{
-    const f=frames.find(x=>x.id==id);f.status=what=='pull'?'arming pull (waits up to 60 s)…':'probing…';row(f);
+    const f=frames.find(x=>x.id==id);f.status={pull:'arming pull (waits up to 60 s)…',reboot:'rebooting (waits up to 2 min)…',off:'turning pull off…'}[what]||'probing…';row(f);
     const d=await api('/api/'+what,{id,single:$('single').checked});
     f.st=d.st;f.status=d.status;row(f);log(d.messages||[]);
   }));
@@ -253,7 +350,7 @@ load();
 
 
 def _state(st: dict) -> dict:
-    out = dict(st)
+    out = {k: v for k, v in st.items() if k != "raw"}
     if "next" in st:
         out["next_text"] = local(st["next"]) if st["next"] else "—"
     if "skew" in st:
@@ -299,7 +396,18 @@ def gui(devices_path: Path | None, port: int = 0) -> None:
             return {"st": {"error": "unknown frame"}, "status": ""}
         if path == "/api/probe":
             st = probe(f)
-            return {"st": _state(st), "status": "" if "error" in st else f"checked {datetime.now():%H:%M:%S}"}
+            return {"st": _state(st), "messages": [f"{f.id}: probe"] + probe_details(st),
+                    "status": "" if "error" in st else f"checked {datetime.now():%H:%M:%S}"}
+        if path == "/api/off":
+            lines = []
+            st = pull_off(f, log=lines.append)
+            return {"st": _state(st), "messages": lines + probe_details(st),
+                    "status": st.get("error", "") or ("pull off" if not st.get("pull") else "pull still ON")}
+        if path == "/api/reboot":
+            lines = []
+            st = reboot(f, log=lines.append)
+            return {"st": _state(st), "messages": lines + probe_details(st),
+                    "status": "" if "error" in st else f"rebooted {datetime.now():%H:%M:%S}"}
         if path == "/api/pull":
             lines: list[str] = []
             ok = pull_now(f, single_image=bool(body.get("single", True)), log=lines.append)
@@ -349,6 +457,11 @@ def main():
     sub = ap.add_subparsers(dest="cmd")
     p_status = sub.add_parser("status", help="probe frames (default: all)")
     p_status.add_argument("ids", nargs="*")
+    p_status.add_argument("-v", "--verbose", action="store_true", help="show the requests (as curl) and raw replies")
+    p_off = sub.add_parser("off", help="turn pull mode off (frame keeps its image; 'pull' turns it back on)")
+    p_off.add_argument("ids", nargs="+")
+    p_reboot = sub.add_parser("reboot", help="restart frames (a chance to resync the clock), then re-probe")
+    p_reboot.add_argument("ids", nargs="+")
     p_pull = sub.add_parser("pull", help="arm pull mode with a pull in ~90s")
     p_pull.add_argument("ids", nargs="+")
     p_pull.add_argument("--keep-local-playback", action="store_true", help="don't switch to single-image mode")

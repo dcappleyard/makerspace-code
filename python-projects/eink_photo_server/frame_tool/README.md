@@ -12,9 +12,10 @@ listed in the server's `devices.yaml`. It can:
   has dropped out of pull mode, or to set up a new one.
 
 There's no API to *set* a Bloomin8's clock, so the tool only shows how far off
-it is. A frame on a network without internet access may not be able to correct
-its clock. The server's **Wake timing → Apply measured** compensates for steady
-drift.
+it is. The server doesn't need it set: it learns each Bloomin8's clock offset
+from its pulls and sends wake times on the frame's own clock (the frame's
+**Frame clock** card in the server UI). **Pull now** is how the server first
+learns it, so use it after setting up or resetting a frame.
 
 Run it on a machine that can reach the frames' network. On this setup that's
 the Mac; the Pi can't reach the IoT VLAN.
@@ -64,5 +65,24 @@ The same actions work from the command line:
 
 ```bash
 .venv/bin/python bloomin8_tool.py status            # all frames
+.venv/bin/python bloomin8_tool.py status -v         # + the requests (as curl), raw replies, both clocks
 .venv/bin/python bloomin8_tool.py pull living_room_73
+.venv/bin/python bloomin8_tool.py off living_room_73      # pull mode off; keeps its image
+.venv/bin/python bloomin8_tool.py reboot living_room_73   # restart, wait, re-probe the clock
 ```
+
+Every **Probe** on the page also writes the requests it sent (as `curl`
+commands), the frame's raw JSON replies, and the frame's clock next to this
+machine's, to the log at the bottom. Tokens are shown as their last 4
+characters only, so the output is safe to paste.
+
+**Reboot** (`POST /reboot`) restarts the frame, waits up to 2 minutes for it
+to answer again, and logs the clock skew before and after. A restart is the
+frame's most likely moment to resync its clock, so it's the quickest way to
+check whether it can reach an NTP server.
+
+**Pull off** turns pull mode off on the frame, keeping its server URL and
+token, so it stops calling the server and keeps showing its current image.
+Use it to park a misbehaving frame, for example one whose clock is so far off
+that every wake time the server gives it is already in its past, so it pulls
+again every minute or two. **Pull now** turns pull mode back on.

@@ -79,6 +79,7 @@ def frame_page(request: Request, device_id: str):
             "plan": schedule.plan_day(conn, dev, now),
             "events": _events(conn, dev.id),
             "drift": drift_stats(conn, dev.id),
+            "early_window": int(schedule.EARLY_WINDOW.total_seconds() // 60),
             "params": {**pipelines.get(dev.pipeline).default_params, **dev.tuning},
             "selections": schedule.SELECTIONS,
         }
@@ -207,6 +208,27 @@ def offset_apply(request: Request, device_id: str):
             db.state(conn, device_id)
             conn.execute("UPDATE device_state SET wake_offset_s = ? WHERE device_id = ?",
                          (stats["suggested"], device_id))
+    return back(request)
+
+
+@router.post("/frame/{device_id}/clock")
+def clock_set(request: Request, device_id: str, seconds: int = Form(...)):
+    """Set an adaptive-clock frame's offset by hand (e.g. frame_tool's measured skew)."""
+    device_or_404(device_id)
+    with db.tx() as conn:
+        db.state(conn, device_id)
+        conn.execute("UPDATE device_state SET clock_offset_s = ?, clock_offset_at = ? WHERE device_id = ?",
+                     (seconds, schedule.utc_now().isoformat(), device_id))
+    return back(request)
+
+
+@router.post("/frame/{device_id}/clock/forget")
+def clock_forget(request: Request, device_id: str):
+    device_or_404(device_id)
+    with db.tx() as conn:
+        db.state(conn, device_id)
+        conn.execute("UPDATE device_state SET clock_offset_s = NULL, clock_offset_at = NULL WHERE device_id = ?",
+                     (device_id,))
     return back(request)
 
 

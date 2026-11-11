@@ -13,7 +13,8 @@ runs until the next block starts, wrapping past midnight. A block is:
              08:00, ...), or hold one photo until the block ends
 
 Devices without blocks get a fallback built from devices.yaml (interval_minutes
-+ wake_hours). Protocol-agnostic: callers add the device's wake offset.
++ wake_hours). Protocol-agnostic: callers add the device's wake offset, or for
+adaptive-clock frames its learned clock offset (learn_clock_offset).
 """
 from __future__ import annotations
 
@@ -40,6 +41,19 @@ MIN_GAP = timedelta(minutes=2)
 EARLY_CAP = timedelta(minutes=60)
 # A pull this soon after an unconfirmed one is treated as a retry of it.
 RETRY_GUARD = timedelta(minutes=5)
+
+# Adaptive clock (devices with Device.adaptive_clock, i.e. Bloomin8). The frame
+# wakes when *its* clock reaches the cron_time we sent, and reports that
+# cron_time, so on a scheduled wake its clock reads ~cron_time when the request
+# arrives: offset = cron_time - arrival. Wake times are sent as target + offset.
+# A pull more than EARLY_WINDOW before the next change keeps the current image
+# and re-aims at the change; within it, it counts as the change.
+EARLY_WINDOW = timedelta(minutes=10)
+# A reading within this of the current offset is normal drift and is taken.
+CLOCK_TRACK = timedelta(minutes=15)
+# A frame whose wake time was already past by its clock pulls again at once;
+# a pull this soon after the previous one is read as that.
+CLOCK_LOOP = timedelta(minutes=3)
 
 
 @dataclass(frozen=True)
@@ -192,6 +206,46 @@ def _pick(conn, device, b: Block, last_photo_id: int | None) -> tuple[int | None
     return item.photo_id, ""
 
 
+def learn_clock_offset(prev: int | None, reading: int | None, ours: bool,
+                       since_last_pull: timedelta | None) -> tuple[int | None, str]:
+    """New frame-clock offset (s) from one pull's reading (cron_time - arrival).
+
+    Which readings are trusted:
+      - none yet, or a wake time this server didn't send (e.g. frame_tool's Pull
+        now, which schedules on the frame's clock): take it.
+      - at or below the current offset + CLOCK_TRACK: a scheduled wake (possibly
+        late because the offset was too high) or normal drift -- take it.
+      - well above it, right after the previous pull: the wake time we sent was
+        already past by the frame's clock, so it pulled at once. The reading is
+        still too low but closer -- take it; it converges in a pull or two.
+      - well above it otherwise: a button or restart wake reporting an old wake
+        time -- ignore it.
+    """
+    if reading is None:
+        return prev, "no cron_time reported"
+    if prev is None:
+        return reading, "learned"
+    if not ours:
+        return reading, "re-learned from a wake this server didn't schedule"
+    if reading <= prev + CLOCK_TRACK.total_seconds():
+        return reading, ""
+    if since_last_pull is not None and since_last_pull <= CLOCK_LOOP:
+        return reading, "raised: its wake time was already past by its clock"
+    return prev, f"ignored a reading of {reading:+d}s (button or restart wake?)"
+
+
+def pending_retry(conn, device, now: datetime):
+    """The last pull, if it's unconfirmed and recent enough that this pull is a retry of it."""
+    last = conn.execute(
+        "SELECT * FROM pulls WHERE device_id = ? ORDER BY at DESC, rowid DESC LIMIT 1", (device.id,)
+    ).fetchone()
+    if (last and last["photo_id"] and not last["signaled_at"]
+            and now - datetime.fromisoformat(last["at"]) < RETRY_GUARD
+            and db.photo(conn, last["photo_id"])):
+        return last
+    return None
+
+
 def effective_time(now: datetime, prev_target: datetime | None, scheduled: bool) -> datetime:
     """The time a pull counts as. A scheduled wake (the frame reported the
     cron_time we sent) arriving shortly before its target counts as the target."""
@@ -213,12 +267,8 @@ def choose(conn, device, now: datetime, at: datetime | None = None) -> tuple[int
     if st["paused"]:
         return st["last_photo_id"], "paused"
 
-    last = conn.execute(
-        "SELECT * FROM pulls WHERE device_id = ? ORDER BY at DESC, rowid DESC LIMIT 1", (device.id,)
-    ).fetchone()
-    if (last and last["photo_id"] and not last["signaled_at"]
-            and now - datetime.fromisoformat(last["at"]) < RETRY_GUARD
-            and db.photo(conn, last["photo_id"])):
+    last = pending_retry(conn, device, now)
+    if last:
         return last["photo_id"], "retry of unconfirmed pull"
 
     occ = current(get_blocks(conn, device), at)

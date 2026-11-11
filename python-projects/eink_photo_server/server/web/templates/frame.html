@@ -34,7 +34,11 @@
       <div>Last pull: {{ st.last_pull_at|local }}</div>
       <div>Last confirmed: {{ st.last_success_at|local }}</div>
       <div>Next wake (target): <b>{{ st.next_target|local }}</b></div>
+      {% if dev.adaptive_clock %}
+      <div class="muted">Sent to frame (on its clock, {{ st.clock_offset_s|duration if st.clock_offset_s is not none else "offset unknown" }}): {{ st.next_cron_sent|local }}</div>
+      {% else %}
       <div class="muted">Sent to frame: {{ st.next_cron_sent|local }}{% if st.wake_offset_s %} (offset {{ st.wake_offset_s|duration }}){% endif %}</div>
+      {% endif %}
       <div>Now in: {% if (current.end - current.start).days >= 1 %}(all day){% else %}{{ current.start.strftime("%H:%M") }}–{{ current.end.strftime("%H:%M") }}{% endif %} — {{ block_text[current.block.key] }}</div>
       {% if st.queued_photo_id %}<div class="warn">Next pull: #{{ st.queued_photo_id }} {{ photo_by_id[st.queued_photo_id].filename if st.queued_photo_id in photo_by_id else "" }}
         <form method="post" action="/ui/device/{{ dev.id }}/queue"><button title="Cancel">✕</button></form></div>{% endif %}
@@ -96,12 +100,28 @@
       <tr><td>{{ w.at.strftime("%a %H:%M") }}</td><td>{{ w.block.start.strftime("%H:%M") }} block</td><td>{{ w.shows }}</td></tr>
       {% endfor %}
     </table></div>
-    <p class="muted">Times are targets; the frame is sent target + wake offset. Queued photos and pause aren't shown here.</p>
+    <p class="muted">Times are targets; the frame is sent target + {{ "its clock offset" if dev.adaptive_clock else "wake offset" }}. Queued photos and pause aren't shown here.</p>
   </details>
 </div>
 
-<h2>Wake timing</h2>
+<h2>{{ "Frame clock" if dev.adaptive_clock else "Wake timing" }}</h2>
 <div class="card">
+  {% if dev.adaptive_clock %}
+  <p class="muted">This frame's clock can't be set, so wake times are sent on its own clock.
+    The server learns the offset (frame clock − real time) from every scheduled pull: the frame wakes when its
+    clock reaches the wake time it was sent, so at that moment its clock reads that time.
+    A scheduled pull more than {{ early_window }} min before the next change keeps the current image and is
+    re-aimed at the change. To (re)teach a frame its offset, use frame_tool's <b>Pull now</b>.</p>
+  <div class="row">
+    <span>Frame clock: <b>{{ st.clock_offset_s|duration if st.clock_offset_s is not none else "not learned yet" }}</b>
+      {% if st.clock_offset_s is not none %}<span class="muted">({{ st.clock_offset_s }} s, measured {{ st.clock_offset_at|local }})</span>{% endif %}</span>
+    <form method="post" action="/frame/{{ dev.id }}/clock" class="row">
+      Set <input class="num" type="number" step="1" name="seconds" placeholder="seconds"> s
+      <button>Set</button>
+    </form>
+    <form method="post" action="/frame/{{ dev.id }}/clock/forget" onsubmit="return confirm('Forget the learned clock offset? The next pull re-learns it.')"><button>Forget</button></form>
+  </div>
+  {% else %}
   <p class="muted">Drift = when the frame actually pulled minus the time it was told to wake.
     The offset is added to every wake time sent, so a frame that wakes 3 min early needs +3 min.</p>
   <div class="row">
@@ -115,6 +135,7 @@
     <form method="post" action="/frame/{{ dev.id }}/offset/apply"><button>Apply measured ({{ drift.suggested|duration }})</button></form>
     {% else %}<span class="muted">No drift measured yet — needs pulls that report cron_time.</span>{% endif %}
   </div>
+  {% endif %}
 </div>
 
 <h2>Log</h2>
@@ -125,14 +146,15 @@
     <form method="post" action="/frame/{{ dev.id }}/log/clear" onsubmit="return confirm('Clear this frame\'s log?')"><button>Clear log</button></form>
   </div>
   <div class="scroll"><table class="log">
-    <tr class="muted"><td>Time</td><td>Event</td><td>Scheduled → drift</td><td>Battery</td><td>Next wake (target / sent)</td><td>Details</td></tr>
+    <tr class="muted"><td>Time</td><td>Event</td><td>Scheduled → drift{% if dev.adaptive_clock %} / clock{% endif %}</td><td>Battery</td><td>Next wake (target / sent)</td><td>Details</td></tr>
     {% for e in events %}{% set d = e.data %}
     <tr>
       <td>{{ e.at|local }}</td>
       <td><span class="kind {{ e.kind }}">{{ e.kind }}</span></td>
-      <td>{% if d.cron_time %}{{ d.cron_time|local }} → {{ d.drift_s|duration }}{% if not d.scheduled_by_server %} <span class="muted" title="cron_time wasn't one this server sent">*</span>{% endif %}{% endif %}</td>
+      <td>{% if d.cron_time and d.clock_offset_s is defined %}<span title="cron_time reported, on the frame's clock: {{ d.cron_time }}">clock {{ d.clock_reading_s|duration }}</span>{% if not d.scheduled_by_server %} <span class="muted" title="cron_time wasn't one this server sent">*</span>{% endif %}
+        {% elif d.cron_time %}{{ d.cron_time|local }} → {{ d.drift_s|duration }}{% if not d.scheduled_by_server %} <span class="muted" title="cron_time wasn't one this server sent">*</span>{% endif %}{% endif %}</td>
       <td>{{ d.battery if d.battery is not none else "" }}</td>
-      <td>{% if d.next_target %}{{ d.next_target|local }}{% if d.next_cron_sent != d.next_target %} / {{ d.next_cron_sent|local }}{% endif %}{% endif %}</td>
+      <td>{% if d.next_target %}{{ d.next_target|local }}{% if d.clock_offset_s is defined %}{% if d.clock_offset_s %} <span class="muted">(frame {{ d.clock_offset_s|duration }})</span>{% endif %}{% elif d.next_cron_sent != d.next_target %} / {{ d.next_cron_sent|local }}{% endif %}{% endif %}</td>
       <td class="wrap">{{ e.summary }}</td>
     </tr>
     {% else %}<tr><td class="muted">No events yet.</td></tr>{% endfor %}

@@ -63,6 +63,7 @@ class Pull:
     target: datetime | None = None
     sent: datetime | None = None     # next wake sent to the frame (target + offset)
     error: str | None = None
+    keep: bool = False               # early pull: no new image, re-aimed at the next change
     event: dict = field(default_factory=dict)
 
     @property
@@ -87,28 +88,47 @@ def run_pull(request: Request, device, now: datetime, *, scheduled_for: datetime
             (battery, now.isoformat(), hw_device_id, device.id))
         # This pull's reading (or the last known one) goes on the image it's served.
         known_battery = db.state(conn, device.id)["battery"]
-        # An early scheduled wake counts as its target slot (see schedule.EARLY_CAP).
-        at = schedule.effective_time(now, schedule.parse_iso(st["next_target"]), ours)
-        photo_id, p.reason = schedule.choose(conn, device, now, at)
-        if at != now:
-            p.reason += f", early by {int((at - now).total_seconds() // 60)} min -> treated as {at.astimezone(cfg.config.tz):%H:%M}"
-        p.target = schedule.next_target(conn, device, at)
-        offset = st["wake_offset_s"] or 0
-        p.sent = max(p.target + timedelta(seconds=offset), now + schedule.MIN_GAP)
+        prev_target = schedule.parse_iso(st["next_target"])
+        clock = {}
+        if device.adaptive_clock:
+            keep_until, at, clock = _adaptive(conn, device, st, now, scheduled_for, ours, prev_target)
+            offset = clock["clock_offset_s"]
+            if keep_until:
+                p.keep, p.target, photo_id = True, keep_until, None
+                p.reason = clock.pop("why")
+            else:
+                photo_id, p.reason = schedule.choose(conn, device, now, at)
+                if at != now:
+                    p.reason += f", early by {_mins(at - now)} min -> treated as {at.astimezone(cfg.config.tz):%H:%M}"
+                p.target = schedule.next_target(conn, device, at)
+            # Sent on the frame's clock.
+            p.sent = max(p.target, now + schedule.MIN_GAP) + timedelta(seconds=offset)
+            p.reason += f" · frame clock {_dur(offset)}" + (f" ({clock['clock_note']})" if clock["clock_note"] else "")
+        else:
+            # An early scheduled wake counts as its target slot (see schedule.EARLY_CAP).
+            at = schedule.effective_time(now, prev_target, ours)
+            photo_id, p.reason = schedule.choose(conn, device, now, at)
+            if at != now:
+                p.reason += f", early by {_mins(at - now)} min -> treated as {at.astimezone(cfg.config.tz):%H:%M}"
+            p.target = schedule.next_target(conn, device, at)
+            offset = st["wake_offset_s"] or 0
+            p.sent = max(p.target + timedelta(seconds=offset), now + schedule.MIN_GAP)
         conn.execute("UPDATE device_state SET next_target = ?, next_cron_sent = ? WHERE device_id = ?",
                      (p.target.isoformat(), p.next_cron, device.id))
         p.photo = db.photo(conn, photo_id) if photo_id else None
     p.event = dict(pull_id=p.pull_id, cron_time=schedule.iso_z(scheduled_for) if scheduled_for else None,
                    drift_s=drift_s, scheduled_by_server=ours, battery=battery, reason=p.reason,
                    effective_at=schedule.iso_z(at), next_target=schedule.iso_z(p.target),
-                   next_cron_sent=p.next_cron, offset_s=offset)
+                   next_cron_sent=p.next_cron, offset_s=offset, **clock)
 
     if not p.photo:
-        log.info("pull %s: %s battery=%s -> nothing (%s), next %s", device.id, p.pull_id, battery, p.reason, p.next_cron)
+        what = "keep current image" if p.keep else "nothing to show"
+        log.info("pull %s: %s battery=%s -> %s (%s), next %s", device.id, p.pull_id, battery, what, p.reason, p.next_cron)
         with db.tx() as conn:
-            conn.execute("INSERT OR REPLACE INTO pulls (pull_id, device_id, at, battery) VALUES (?,?,?,?)",
-                         (p.pull_id, device.id, now.isoformat(), battery))
-            db.log_event(conn, device.id, "pull", f"nothing to show ({p.reason})", now.isoformat(), **p.event)
+            if not p.keep:   # an early pull isn't a pull to retry or confirm
+                conn.execute("INSERT OR REPLACE INTO pulls (pull_id, device_id, at, battery) VALUES (?,?,?,?)",
+                             (p.pull_id, device.id, now.isoformat(), battery))
+            db.log_event(conn, device.id, "pull", f"{what} ({p.reason})", now.isoformat(), **p.event)
         return p
 
     try:
@@ -133,6 +153,48 @@ def run_pull(request: Request, device, now: datetime, *, scheduled_for: datetime
     log.info("pull %s: %s battery=%s -> photo %s (%s), next %s",
              device.id, p.pull_id, battery, p.photo["id"], p.reason, p.next_cron)
     return p
+
+
+def _mins(td: timedelta) -> int:
+    return int(td.total_seconds() // 60)
+
+
+def _dur(seconds: int) -> str:
+    s = abs(int(seconds))
+    sign = "-" if seconds < 0 else "+"
+    return f"{sign}{s // 3600}h{s % 3600 // 60:02d}m" if s >= 3600 else f"{sign}{s // 60}m{s % 60:02d}s"
+
+
+def _adaptive(conn, device, st, now, scheduled_for, ours, prev_target):
+    """Adaptive-clock part of a pull: update the learned frame-clock offset and
+    decide between keeping the current image (early) and a normal pull.
+    Returns (keep-until time or None, effective time, clock event fields)."""
+    reading = int((scheduled_for - now).total_seconds()) if scheduled_for else None
+    last_pull = schedule.parse_iso(st["last_pull_at"])
+    offset, note = schedule.learn_clock_offset(st["clock_offset_s"], reading, ours,
+                                               now - last_pull if last_pull else None)
+    if offset is not None and reading is not None and offset == reading:
+        conn.execute("UPDATE device_state SET clock_offset_s = ?, clock_offset_at = ? WHERE device_id = ?",
+                     (offset, now.isoformat(), device.id))
+    if offset is None:
+        note = "unknown -- use frame_tool's Pull now to teach it"
+    clock = {"clock_offset_s": offset or 0, "clock_reading_s": reading, "clock_note": note}
+
+    # The change this pull is heading for: the one we last aimed at (already due
+    # if it has passed), or sooner if the schedule was edited since.
+    upcoming = schedule.next_target(conn, device, now)
+    if prev_target:
+        upcoming = min(upcoming, prev_target)
+    showing = st["last_photo_id"] and db.photo(conn, st["last_photo_id"])
+    # Only wakes we scheduled are held back; one armed elsewhere (frame_tool's
+    # Pull now, the app) is someone asking for an image now.
+    if (ours and upcoming - now > schedule.EARLY_WINDOW and showing and not st["queued_photo_id"]
+            and not st["paused"] and not schedule.pending_retry(conn, device, now)):
+        clock["why"] = (f"early by {_mins(upcoming - now)} min -> keeping the current image until "
+                        f"{upcoming.astimezone(cfg.config.tz):%H:%M}")
+        return upcoming, now, clock
+    at = upcoming if timedelta(0) < upcoming - now <= schedule.EARLY_WINDOW else now
+    return None, at, clock
 
 
 def record_signal(pull_id: str, device, success: bool, summary: str | None = None) -> str | None:

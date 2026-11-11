@@ -66,6 +66,12 @@ class Device:
     caption_size: int | None = None    # px of the smaller text; default scales with the panel
     options: dict = field(default_factory=dict)   # pipeline-specific (e.g. strip_height, fit)
 
+    @property
+    def adaptive_clock(self) -> bool:
+        """Wake times go out on the frame's own clock, learned from its pulls
+        (schedule.learn_clock_offset). Bloomin8: its clock can't be set and may be far off."""
+        return self.protocol == "bloomin8"
+
     @classmethod
     def from_dict(cls, d: dict) -> Device:
         wake = d.get("wake_hours") or [None, None]
