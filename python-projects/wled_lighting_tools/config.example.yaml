@@ -33,6 +33,7 @@ schedule:
     - sequence
     - ring_spin
     - strand_flow
+    - firework
     - {show: twinkle, minutes: 15}
     # - wled:1
   shuffle: false
