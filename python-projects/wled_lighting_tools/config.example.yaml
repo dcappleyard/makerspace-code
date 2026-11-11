@@ -21,8 +21,9 @@ schedule:
     # - on: "06:00"            # optional morning window
     #   off: sunrise + 15m
 
-  brightness: 160              # WLED master brightness sent at on-time (0-255); omit to leave as-is
-  scale: 1.0                   # runner-side brightness scale for DDP shows (0-1)
+  brightness: 160              # WLED master brightness sent at on-time (0-255). Affects wled:<id> presets
+                               # and WLED's fallback only; it does NOT dim DDP shows on this setup.
+  scale: 1.0                   # brightness of DDP shows (0-1); the only dimmer for them
 
   # Rotation: show names from shows/, or wled:<preset id> to hand over to a
   # WLED preset (DDP stops while it runs). Per-entry minutes override minutes_each.

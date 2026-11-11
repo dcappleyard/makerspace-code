@@ -122,14 +122,14 @@ Renders shows from the pixel map so they can be developed without the hardware. 
 - **Patterns:** all test patterns displayed correctly.
 - **Pixel IDs:** lights identify correctly. The map in `pixels.csv` matches the physical stems, rings, and rods (`parts`, `step`/`chase`).
 - **Strands:** output 1 = 3'→5', output 2 = 5'→3', matching `OUTPUT1_STRAND = "3to5"`. No swap needed.
-- **Brightness:** controllable, and `ramp` fades up and down smoothly.
+- **Brightness:** `--scale` (runner/tool side) dims DDP and `ramp` fades smoothly. WLED's master brightness (`power on --bri 60`) had **no effect on DDP**.
 
 Still to check on hardware: the runner's `wled:<id>` preset hand-off (`{"live": false, "ps": id}`), a full scheduled evening, and the systemd service once a Pi is available.
 
 ## Questions to settle
 
 1. **Brightness during DDP.** Does WLED apply its master brightness (`bri`) and the limiter to realtime data with our settings? There's a realtime "force max brightness" option in Sync Interfaces. Decide whether brightness is controlled by WLED's `bri` or scaled in the runner, and verify on hardware.
-   *2026-11-11:* brightness is controllable on the sculpture and ramps smoothly. Note here whether WLED's `bri` scales DDP, or only `--scale` does.
+   *Resolved 2026-11-11:* WLED's `bri` does **not** scale DDP on this setup. Most likely "Force max brightness" is on under Sync Interfaces → Realtime; not checked. So DDP shows are dimmed only by the runner's `schedule.scale` (or `--scale`), and `schedule.brightness` only affects `wled:<id>` presets and WLED's own fallback effect. Still unverified: whether WLED's power limiter caps realtime data. Full white is ~5 A, well under the supply, so it's low stakes.
 2. **Handing off to a WLED preset.** While realtime is active, WLED ignores effect changes on the display. Stopping DDP and waiting out the ~2.5 s timeout works but leaves a gap; alternatively, send `{"live": false}` / the `lor` live-override field along with `ps`. Pick one and test it.
    *Implemented:* the runner stops sending DDP, then posts `{"live": false, "ps": id}`. **Verify on hardware** that the preset appears right away rather than after the timeout.
 3. **Pi vs. WLED timers.** Both turn the sculpture on around sunset. Confirm they don't fight: the runner's DDP overrides WLED's preset while streaming, and its `{"on": false}` at off-time should come before (or match) WLED's own off timer.

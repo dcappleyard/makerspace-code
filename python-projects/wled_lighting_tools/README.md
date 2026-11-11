@@ -105,6 +105,6 @@ Every pattern streams until Ctrl-C, and WLED goes back to its own effect ~2.5 s 
    - `python3 testpattern.py basepairs`: red at the bottom to violet at the top.
    - `python3 testpattern.py step --output 1`: one pixel at a time, with its labels printed. Enter = next, `b` = back, a number jumps to that index, `q` quits.
    - `python3 testpattern.py chase --speed 4`: the same walk, automated.
-5. **Brightness / power:** `python3 testpattern.py ramp --scale 1`. Also try it after `python3 testpattern.py power on --bri 60`, to see whether WLED's master brightness applies to DDP.
+5. **Brightness / power:** `python3 testpattern.py ramp --scale 1`. On this setup WLED's master brightness (`power on --bri N`) does **not** dim DDP; only `--scale` does. The runner's `schedule.scale` is the dimmer for shows.
 
 Other commands: `solid R G B`, `blank`, `power on|off [--bri N]`.
