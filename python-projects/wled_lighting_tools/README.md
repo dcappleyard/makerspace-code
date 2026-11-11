@@ -54,6 +54,37 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 - **Source** menu: "DDP input" (default) or any show in `shows/`, rendered locally with live reload. `--show NAME` starts on one.
 - Options: `--ddp-port`, `--http-port`, `--bind 127.0.0.1` (local only; the default 0.0.0.0 accepts DDP from the LAN). Only one program can hold udp/4048 at a time.
 
+## Runner (scheduled shows)
+
+`runner.py` turns WLED on at each window's start (`{"on": true, "bri": N}`), plays the rotation, and turns it off at the window's end. The schedule, rotation, and brightness live in `config.yaml` (see `config.example.yaml`).
+
+```bash
+python3 runner.py --schedule               # next 7 days: sunrise/sunset and on-windows
+python3 runner.py --preview --force-on     # rotation into the local preview now, no WLED API calls
+python3 runner.py --force-on               # rotation on the sculpture now, ignoring the schedule
+python3 runner.py                          # normal scheduled operation (what systemd runs)
+```
+
+- **Rotation entries:** a show name, `wled:<preset id>`, or `{show: name, minutes: N}`. For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
+- **Failures:** if WLED is unreachable, API calls are retried every 30 s and streaming carries on. A show that errors keeps its last good frame. Invalid rotation entries are logged and skipped.
+- **Stopping mid-window** (Ctrl-C, SIGTERM, crash) only stops streaming. WLED falls back to its own effect ~2.5 s later, which is the intended fallback.
+- **YAML note:** PyYAML reads a bare `on:` key as boolean `true`. The schedule parser accepts that, so `on:` / `off:` work as written.
+
+### Install on the Pi
+
+```bash
+git clone <this repo> ~/makerspace-code      # or pull
+cd ~/makerspace-code/python-projects/wled_lighting_tools
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp config.example.yaml config.yaml && nano config.yaml
+.venv/bin/python runner.py --schedule        # sanity-check location/timezone
+sudo cp systemd/wled-show-runner.service /etc/systemd/system/   # edit User/paths if not pi / ~/makerspace-code
+sudo systemctl daemon-reload && sudo systemctl enable --now wled-show-runner
+journalctl -u wled-show-runner -f
+```
+
+The Pi's clock must be right (NTP). The unit waits for `time-sync.target`.
+
 ## WLED settings checklist
 
 - **Config → LED Preferences:** 2 outputs. GPIO16 start 0 length 100; GPIO3 start 100 length 100. Brightness limiter on, ~10 A.

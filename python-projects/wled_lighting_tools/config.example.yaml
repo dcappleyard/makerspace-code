@@ -3,3 +3,37 @@ wled:
   host: wled-sculpture.local   # mDNS name or IP of the Dig-Uno
   ddp_port: 4048
   fps: 40
+  # api_port: 80               # WLED JSON API port (only change for testing)
+
+location:                      # for sunrise/sunset (astral)
+  name: Madison
+  latitude: 43.07
+  longitude: -89.40
+  timezone: America/Chicago
+
+schedule:
+  # Times: "HH:MM", or sunrise / sunset / dawn / dusk / noon with an optional
+  # offset, e.g. "sunset - 15m", "sunrise + 1h30m". An off time at or before
+  # the on time means the next day (e.g. off: "01:00").
+  windows:
+    - on: sunset - 15m
+      off: "23:00"
+    # - on: "06:00"            # optional morning window
+    #   off: sunrise + 15m
+
+  brightness: 160              # WLED master brightness sent at on-time (0-255); omit to leave as-is
+  scale: 1.0                   # runner-side brightness scale for DDP shows (0-1)
+
+  # Rotation: show names from shows/, or wled:<preset id> to hand over to a
+  # WLED preset (DDP stops while it runs). Per-entry minutes override minutes_each.
+  minutes_each: 10
+  rotation:
+    - rainbow_helix
+    - sequence
+    - ring_spin
+    - strand_flow
+    - {show: twinkle, minutes: 15}
+    # - wled:1
+  shuffle: false
+  transition_seconds: 2        # crossfade between DDP shows (0 = hard cut)
+  reassert_on: false           # every minute, turn WLED back on if something turned it off mid-window

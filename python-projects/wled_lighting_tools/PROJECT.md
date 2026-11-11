@@ -119,10 +119,14 @@ Renders shows from the pixel map so they can be developed without the hardware. 
 
 1. **Brightness during DDP.** Does WLED apply its master brightness (`bri`) and the limiter to realtime data with our settings? There's a realtime "force max brightness" option in Sync Interfaces. Decide whether brightness is controlled by WLED's `bri` or scaled in the runner, and verify on hardware.
 2. **Handing off to a WLED preset.** While realtime is active, WLED ignores effect changes on the display. Stopping DDP and waiting out the ~2.5 s timeout works but leaves a gap; alternatively, send `{"live": false}` / the `lor` live-override field along with `ps`. Pick one and test it.
+   *Implemented:* the runner stops sending DDP, then posts `{"live": false, "ps": id}`. **Verify on hardware** that the preset appears right away rather than after the timeout.
 3. **Pi vs. WLED timers.** Both turn the sculpture on around sunset. Confirm they don't fight: the runner's DDP overrides WLED's preset while streaming, and its `{"on": false}` at off-time should come before (or match) WLED's own off timer.
-4. **Morning window?** Only an evening window so far. Is a pre-sunrise window wanted (e.g. `on: "06:00"`, `off: sunrise`)? The config should probably allow a list of windows.
+4. **Morning window?** Only an evening window so far. Is a pre-sunrise window wanted (e.g. `on: "06:00"`, `off: sunrise`)?
+   *Implemented:* `schedule.windows` is a list; the example config has a commented-out morning window.
 5. **Transitions.** Hard cut between shows, or a short crossfade (easy for DDP→DDP; DDP↔preset is limited to what WLED does itself).
+   *Implemented:* `transition_seconds` crossfade between DDP shows (0 = hard cut); preset hand-offs are hard cuts.
 6. **Daytime/manual override.** A way to run a show on demand outside the schedule (CLI flag now, web UI later).
+   *Implemented (CLI):* `play.py <show>` for one show, `runner.py --force-on` for the rotation. Web UI later.
 
 ## Proposals (for discussion)
 
@@ -145,6 +149,7 @@ wled_lighting_tools/
   layout.py           Layout: pixels.csv as numpy arrays + derived geometry (the `meta` shows get)
   shows/              one module per show; __init__.py has the loader + Player; _util.py helpers
   play.py             play one show over DDP (sculpture, preview, or both)
+  schedule.py         sun/clock time expressions and on/off windows (astral)
   runner.py           scheduler + rotation + streaming loop
   testpattern.py      bench/test CLI
   preview/            server.py (DDP receiver + HTTP/SSE) + index.html (canvas 3D view)
@@ -160,4 +165,5 @@ wled_lighting_tools/
 3. **Shows:** show interface, loader, and a first handful of shows designed for the sculpture's shape.
    *Status:* built. `layout.Layout` (meta), `shows.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and five shows: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`. The preview can run shows locally with live reload. Checked in the preview only, not on the sculpture.
 4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, systemd unit.
+   *Status:* built (`schedule.py`, `runner.py`, `systemd/wled-show-runner.service`). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. **Not yet run on the Pi or the sculpture.**
 5. **Optional:** FastAPI web UI for picking a show and editing the schedule.

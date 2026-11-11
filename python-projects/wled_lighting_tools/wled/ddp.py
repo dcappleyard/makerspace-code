@@ -51,7 +51,9 @@ class Streamer(threading.Thread):
         nxt = time.monotonic()
         try:
             while not self._halt.is_set():
-                self.sender.send(self.source())
+                frame = self.source()
+                if frame is not None:             # None = send nothing (e.g. a WLED preset is running)
+                    self.sender.send(frame)
                 nxt += self.period
                 delay = nxt - time.monotonic()
                 if delay > 0:
