@@ -20,6 +20,25 @@ python3 pixel_map.py --svg pixel_map_check.svg
 
 Writes `pixels.csv` from the geometry constants at the top of `pixel_map.py`, plus an optional top/side-view check plot. Edit the constants and rerun; don't hand-edit the CSV.
 
+## Shows
+
+A show is a module in `shows/` with `render(t, xyz, meta)`, returning `(200, 3)` RGB as uint8 or floats in 0..1. `meta` is a `layout.Layout`:
+
+- **Labels:** `strand_id`, `base_pair`, `part`, `slot`.
+- **Masks:** `stem`, `ring`, `rod`.
+- **Geometry:** `theta`, `r`, `h` (0 bottom to 1 top), `lollipop_theta`, `ring_pos`, `strand_pos`, `bp_frac`.
+
+Helpers are in `shows/_util.py` (`hsv`, `rgb`, `pulse`, `wrap`, `hash01`, ...). Keep `render` a pure function of `t`: use `hash01` for randomness.
+
+```bash
+python3 play.py --list
+python3 play.py sequence --preview              # to the browser preview
+python3 play.py sequence                        # to the sculpture (wled.host)
+python3 play.py twinkle --also 127.0.0.1        # sculpture + preview together
+```
+
+To write a new show, start the preview, pick the show in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
+
 ## Browser preview
 
 ```bash
@@ -32,6 +51,7 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 - Drag to rotate, scroll to zoom, double-click to reset. Front / 3/4 / Top views, plus auto-spin.
 - Hover a bulb to see its index, output/light, strand, base pair, part, slot, and current RGB.
 - The status chip shows live/idle, fps, the sender's address, and DDP sequence gaps. After 2.5 s without packets the frame dims: that's when the real sculpture would fall back to its WLED effect.
+- **Source** menu: "DDP input" (default) or any show in `shows/`, rendered locally with live reload. `--show NAME` starts on one.
 - Options: `--ddp-port`, `--http-port`, `--bind 127.0.0.1` (local only; the default 0.0.0.0 accepts DDP from the LAN). Only one program can hold udp/4048 at a time.
 
 ## WLED settings checklist

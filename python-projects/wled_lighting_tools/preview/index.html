@@ -37,6 +37,11 @@
   button:hover { border-color: var(--muted); }
   button.on { border-color: var(--accent); color: var(--accent); }
   input[type=range] { width: 110px; accent-color: var(--accent); }
+  select { font: inherit; color: var(--text); background: #12141a; border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 6px; max-width: 46vw; }
+  .err { color: #ff7a6b; border-color: #5a2a26; font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px; max-width: 100%; white-space: pre-wrap; }
+  .err[hidden] { display: none; }
   #tip { position: fixed; pointer-events: none; display: none; background: var(--panel);
     border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; white-space: nowrap;
     font-variant-numeric: tabular-nums; }
@@ -51,6 +56,12 @@
 <div class="bar" id="top">
   <div class="chip" id="status"><span class="dot"></span><span id="statusText">connecting…</span></div>
   <div class="chip muted hide-narrow" id="stats"></div>
+  <div class="chip">
+    <span class="muted">Source</span>
+    <select id="source"><option value="ddp">DDP input</option></select>
+    <button id="restart" title="Restart the show's clock (t = 0)">Restart</button>
+  </div>
+  <div class="chip err" id="err" hidden></div>
 </div>
 
 <div class="bar" id="bottom">
@@ -281,15 +292,45 @@ exp.oninput = () => opts.exposure = parseFloat(exp.value);
 // ---------------------------------------------------------------- data
 const statusEl = document.getElementById("status"), statusText = document.getElementById("statusText");
 const statsEl = document.getElementById("stats");
+const sourceSel = document.getElementById("source"), errEl = document.getElementById("err");
 function showStatus(st) {
   live = st.live;
   statusEl.className = "chip " + (st.live ? "live" : "idle");
-  statusText.textContent = st.live
-    ? `receiving DDP from ${st.sender}`
-    : st.age == null ? "waiting for DDP on udp/4048"
-    : `idle ${st.age}s (the sculpture would be back on its WLED effect)`;
-  statsEl.textContent = `${st.fps} fps · ${st.frames} frames · ${st.seq_gaps} seq gaps`;
+  if (st.source === "show") {
+    statusText.textContent = `local show '${st.show}' (reloads when its file is saved)`;
+    statsEl.textContent = `${st.fps} fps`;
+  } else {
+    statusText.textContent = st.live
+      ? `receiving DDP from ${st.sender}`
+      : st.age == null ? "waiting for DDP on udp/4048"
+      : `idle ${st.age}s (the sculpture would be back on its WLED effect)`;
+    statsEl.textContent = `${st.fps} fps · ${st.frames} frames · ${st.seq_gaps} seq gaps`;
+  }
+  const want = st.source === "show" ? "show:" + st.show : "ddp";
+  if (sourceSel.value !== want && document.activeElement !== sourceSel) sourceSel.value = want;
+  errEl.hidden = !st.error;
+  errEl.textContent = st.error ? "show error: " + st.error : "";
 }
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  if (j.error) { errEl.hidden = false; errEl.textContent = j.error; } else showStatus(j);
+}
+sourceSel.onchange = () => {
+  const v = sourceSel.value;
+  post("/source", v === "ddp" ? { source: "ddp" } : { source: "show", name: v.slice(5) });
+};
+document.getElementById("restart").onclick = () => post("/restart");
+fetch("/shows").then(r => r.json()).then(j => {
+  for (const s of j.shows) {
+    const o = document.createElement("option");
+    o.value = "show:" + s.name; o.textContent = s.name; o.title = s.description;
+    sourceSel.appendChild(o);
+  }
+  if (j.error) { errEl.hidden = false; errEl.textContent = j.error; }
+});
 
 function connect() {
   const es = new EventSource("/stream");

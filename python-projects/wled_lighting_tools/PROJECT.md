@@ -79,7 +79,7 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
 ### 2. Pi show runner (this repo)
 
 - **Shows** (`shows/`): one module per show, interface
-  `render(t: float, xyz: np.ndarray[N,3], meta) -> np.ndarray[N,3] uint8`
+  `render(t: float, xyz: np.ndarray[N,3], meta) -> np.ndarray[N,3] uint8` (floats 0..1 also accepted)
   where `t` is seconds since the show started, `xyz` is the pixel map, and `meta` holds the per-pixel labels from `pixels.csv` (strand, base_pair, part, slot) so shows can target stems, rings, and rods. Shows are pure functions of time and position, so they render identically on hardware and in the simulator.
 - **WLED presets in the rotation:** an entry can be `wled:<preset_id>`. The runner stops DDP streaming and sends `POST /json/state {"ps": id}`; WLED runs its own effect until the next rotation slot.
 - **Scheduler:** uses `astral` to compute sunset/sunrise daily. YAML config, e.g.
@@ -142,7 +142,9 @@ wled_lighting_tools/
   pixel_map.py        generates pixels.csv (+ SVG check plot); load() reads it back
   pixels.csv          pixel map
   wled/               ddp.py (sender + Streamer thread), api.py (JSON API, stdlib urllib)
-  shows/              one module per show
+  layout.py           Layout: pixels.csv as numpy arrays + derived geometry (the `meta` shows get)
+  shows/              one module per show; __init__.py has the loader + Player; _util.py helpers
+  play.py             play one show over DDP (sculpture, preview, or both)
   runner.py           scheduler + rotation + streaming loop
   testpattern.py      bench/test CLI
   preview/            server.py (DDP receiver + HTTP/SSE) + index.html (canvas 3D view)
@@ -154,7 +156,8 @@ wled_lighting_tools/
 1. **Bench tools:** DDP sender, WLED JSON client, test-pattern CLI. Confirm color order, string order, and brightness behavior on the real hardware.
    *Status:* built (`wled/`, `testpattern.py`); packet format and the 40 fps rate verified against a local UDP listener. **Not yet run on the sculpture** — see README "Bench check".
 2. **Pixel map + simulator:** approximate `pixels.csv` from the sculpture description; preview renders shows and receives DDP.
-   *Status:* `pixel_map.py` and `preview/` (stdlib DDP receiver + SSE → canvas 3D view) built and checked with `testpattern.py` at ~40 fps. Rendering shows directly (without DDP) waits for the show framework in milestone 3; the runner can stream to the preview instead.
+   *Status:* `pixel_map.py` and `preview/` (stdlib DDP receiver + SSE → canvas 3D view) built and checked with `testpattern.py` at ~40 fps. It can also render shows locally (no DDP) with live reload; see milestone 3.
 3. **Shows:** show interface, loader, and a first handful of shows designed for the sculpture's shape.
+   *Status:* built. `layout.Layout` (meta), `shows.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and five shows: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`. The preview can run shows locally with live reload. Checked in the preview only, not on the sculpture.
 4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, systemd unit.
 5. **Optional:** FastAPI web UI for picking a show and editing the schedule.
