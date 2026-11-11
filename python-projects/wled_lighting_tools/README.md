@@ -93,6 +93,8 @@ The Pi's clock must be right (NTP). The unit waits for `time-sync.target`.
 
 ## Bench check (`testpattern.py`)
 
+Passed on the sculpture on 2026-11-11 (results in PROJECT.md). Rerun it after any wiring or WLED config change.
+
 Every pattern streams until Ctrl-C, and WLED goes back to its own effect ~2.5 s later. `--scale` (default 0.5) scales all colors; `--host` overrides the config.
 
 1. **Reachability:** `python3 testpattern.py info`. LED count should be 200.

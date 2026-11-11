@@ -17,7 +17,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# --- Which strand is on which Dig-Uno output (unknown — flip when confirmed) ---
+# --- Which strand is on which Dig-Uno output (confirmed on hardware 2026-11-11) ---
 OUTPUT1_STRAND = "3to5"          # the other strand ("5to3") is on output 2
 
 # --- Geometry, inches ---
