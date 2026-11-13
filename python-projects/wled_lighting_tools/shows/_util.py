@@ -51,3 +51,31 @@ def hash01(*keys):
 
 def frame(n):
     return np.zeros((n, 3))
+
+
+NAMED_COLORS = {
+    "red": "#ff0000", "orange": "#ff6000", "amber": "#ffa000", "gold": "#ffc000",
+    "yellow": "#ffe000", "lime": "#80ff00", "green": "#00ff20", "teal": "#00c080",
+    "cyan": "#00e0ff", "sky": "#0090ff", "blue": "#0020ff", "indigo": "#3000ff",
+    "purple": "#8000ff", "violet": "#c000ff", "magenta": "#ff00c0", "pink": "#ff4080",
+    "white": "#ffffff", "warmwhite": "#ffb060", "black": "#000000", "off": "#000000",
+}
+
+
+def color(spec):
+    """A user color -> float RGB: a name in NAMED_COLORS, '#rrggbb' / 'rrggbb',
+    or (r, g, b) 0-255. Raises ValueError."""
+    if isinstance(spec, str):
+        s = spec.strip().lower()
+        s = NAMED_COLORS.get(s, s)
+        h = s.lstrip("#")
+        if len(h) == 6 and all(c in "0123456789abcdef" for c in h):
+            return rgb("#" + h)
+        raise ValueError(f"unknown color {spec!r} (use #rrggbb or one of: {', '.join(NAMED_COLORS)})")
+    try:
+        c = [float(v) for v in spec]
+    except TypeError:
+        raise ValueError(f"unknown color {spec!r}") from None
+    if len(c) != 3 or not all(0 <= v <= 255 for v in c):
+        raise ValueError(f"color {spec!r} should be (r, g, b) with 0-255 values")
+    return np.array(c) / 255.0

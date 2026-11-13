@@ -13,9 +13,18 @@ randomness use shows._util.hash01 instead of random.
 
 Optional module attributes: DESCRIPTION (one line).
 Files starting with "_" are helpers, not shows.
+
+Options: a show that takes settings defines OPTIONS = {name: default} and
+render(t, xyz, meta, opts). Options come from play.py (-o key=value), a
+rotation entry's options: in config.yaml, or the defaults. An optional
+prepare(opts) -> opts parses/validates them once (raise ValueError for bad
+ones) instead of on every frame. An option "seed" left at None gets a random
+value per run (printed by play.py, re-rolled by the preview's Restart), so a
+"random" show is still a pure function of t within a run.
 """
 import importlib
 import pkgutil
+import random
 import time
 from pathlib import Path
 
@@ -47,15 +56,38 @@ class Player:
     that raises keeps its last good frame, and the error is kept in .error.
     """
 
-    def __init__(self, name, layout, scale=1.0, reload=False):
+    def __init__(self, name, layout, scale=1.0, reload=False, options=None):
         self.name, self.layout, self.scale, self.reload = name, layout, scale, reload
+        self.options = dict(options or {})     # as given; defaults fill the rest
         self.mod = load(name)
+        self._auto_seed = False
+        self.raw_opts, self.opts = self._resolve(self.mod)
         self.t0 = time.monotonic()
         self.reload_error = None     # last failed re-import (old module keeps running)
         self.render_error = None     # last render() exception
         self._mtime = self._stat()
         self._next_check = 0.0
         self._last = bytes(3 * layout.n)
+
+    def _resolve(self, mod, reroll=False):
+        """(merged options, prepared options) for mod; raises ValueError."""
+        defaults = getattr(mod, "OPTIONS", None)
+        if defaults is None:
+            if self.options:
+                raise ValueError(f"show '{self.name}' takes no options")
+            return {}, None
+        unknown = set(self.options) - set(defaults)
+        if unknown:
+            raise ValueError(f"show '{self.name}' has no option(s) {', '.join(sorted(unknown))}; "
+                             f"it takes {', '.join(defaults)}")
+        raw = {**defaults, **self.options}
+        if "seed" in raw and raw["seed"] is None:
+            self._auto_seed = True
+        if self._auto_seed:
+            old = getattr(self, "raw_opts", {}).get("seed")
+            raw["seed"] = random.randrange(1 << 31) if (reroll or old is None) else old
+        prep = getattr(mod, "prepare", None)
+        return raw, (prep(dict(raw)) if prep else raw)
 
     def _stat(self):
         try:
@@ -71,7 +103,9 @@ class Player:
         if m != self._mtime:
             self._mtime = m
             try:
-                self.mod = importlib.reload(self.mod)
+                mod = importlib.reload(self.mod)
+                self.raw_opts, self.opts = self._resolve(mod)
+                self.mod = mod
                 self.reload_error = None
             except Exception as e:                       # syntax error etc.
                 self.reload_error = f"reload failed, still running the previous version: {type(e).__name__}: {e}"
@@ -80,7 +114,10 @@ class Player:
     def error(self):
         return self.reload_error or self.render_error
 
-    def restart(self):
+    def restart(self, reroll=False):
+        """Restart the clock; reroll=True also picks a new random seed (if auto)."""
+        if reroll and self._auto_seed:
+            self.raw_opts, self.opts = self._resolve(self.mod, reroll=True)
         self.t0 = time.monotonic()
 
     def frame(self):
@@ -88,7 +125,12 @@ class Player:
         if self.reload:
             self._maybe_reload(now)
         try:
-            a = to_frame(self.mod.render(now - self.t0, self.layout.xyz, self.layout), self.layout.n)
+            t = now - self.t0
+            if self.opts is None:
+                out = self.mod.render(t, self.layout.xyz, self.layout)
+            else:
+                out = self.mod.render(t, self.layout.xyz, self.layout, self.opts)
+            a = to_frame(out, self.layout.n)
             if self.scale != 1.0:
                 a = (a * self.scale + 0.5).astype(np.uint8)
             self._last = a.tobytes()
@@ -96,6 +138,26 @@ class Player:
         except Exception as e:
             self.render_error = f"{type(e).__name__}: {e}"
         return self._last
+
+
+def parse_option(text):
+    """'key=value' from the command line -> (key, value); value as bool/None/int/float/str."""
+    if "=" not in text:
+        raise ValueError(f"option {text!r} should be key=value")
+    k, v = (x.strip() for x in text.split("=", 1))
+    low = v.lower()
+    if low in ("true", "yes"):
+        return k, True
+    if low in ("false", "no"):
+        return k, False
+    if low in ("none", "null", ""):
+        return k, None
+    for typ in (int, float):
+        try:
+            return k, typ(v)
+        except ValueError:
+            pass
+    return k, v
 
 
 def to_frame(out, n):

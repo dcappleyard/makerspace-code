@@ -36,6 +36,9 @@ schedule:
     - strand_flow
     - firework
     - {show: twinkle, minutes: 15}
+    - {show: dna_strand, options: {motion: up, bpm: 30}}   # random colors each time it comes up
+    # - show: dna_strand                             # options: see play.py --list
+    #   options: {palette: classic, rod: white, sequence: GATTACA}
     # - wled:1
   shuffle: false
   transition_seconds: 2        # crossfade between DDP shows (0 = hard cut)

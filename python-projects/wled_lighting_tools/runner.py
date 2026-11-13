@@ -43,6 +43,7 @@ class Entry:
     kind: str            # "show" or "preset"
     name: str            # show name, or preset id as str
     minutes: float
+    options: dict = None  # show options (rotation entry's options:)
 
     def __str__(self):
         return self.name if self.kind == "show" else f"wled:{self.name}"
@@ -53,9 +54,10 @@ def parse_rotation(sc):
     known = set(shows.available())
     out = []
     for item in sc.get("rotation", []):
-        minutes = default
+        minutes, options = default, None
         if isinstance(item, dict):
             minutes = float(item.get("minutes", default))
+            options = item.get("options")
             item = f"wled:{item['wled']}" if "wled" in item else item.get("show")
         item = str(item).strip()
         if item.startswith("wled:"):
@@ -65,7 +67,7 @@ def parse_rotation(sc):
                 continue
             out.append(Entry("preset", pid, minutes))
         elif item in known:
-            out.append(Entry("show", item, minutes))
+            out.append(Entry("show", item, minutes, options))
         else:
             log.error("rotation: no show %r in shows/, skipped (have: %s)", item, ", ".join(sorted(known)))
     return out
@@ -273,7 +275,7 @@ class Runner:
             return True
         if e.kind == "show":
             try:
-                player = shows.Player(e.name, self.layout, scale=self.scale)
+                player = shows.Player(e.name, self.layout, scale=self.scale, options=e.options)
             except Exception as ex:
                 log.error("show %s failed to load: %s", e.name, ex)
                 return False
@@ -281,6 +283,8 @@ class Runner:
             self.mixer.switch(player, fade)
             self.pending.pop("preset", None)
             log.info("playing %s for %g min%s", e, e.minutes, f" (crossfade {fade:g}s)" if fade else "")
+            if player.raw_opts:
+                log.info("  options: %s", ", ".join(f"{k}={v}" for k, v in player.raw_opts.items()))
             return True
         # WLED preset: stop sending DDP, then leave realtime mode and apply the preset
         self.mixer.switch(None)

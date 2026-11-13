@@ -28,13 +28,17 @@ A show is a module in `shows/` with `render(t, xyz, meta)`, returning `(200, 3)`
 - **Masks:** `stem`, `ring`, `rod`.
 - **Geometry:** `theta`, `r`, `h` (0 bottom to 1 top), `lollipop_theta`, `ring_pos`, `strand_pos`, `bp_frac`.
 
-Helpers are in `shows/_util.py` (`hsv`, `rgb`, `pulse`, `wrap`, `hash01`, ...). Keep `render` a pure function of `t`: use `hash01` for randomness.
+Helpers are in `shows/_util.py` (`hsv`, `rgb`, `color`, `pulse`, `wrap`, `hash01`, ...). Keep `render` a pure function of `t`: use `hash01` for randomness.
+
+Some shows take options (`play.py --list` shows them and their defaults). Pass them with `-o key=value`, or in the rotation as `{show: dna_strand, options: {...}}`. Colors are names (`red`, `gold`, `warmwhite`, ... see `_util.NAMED_COLORS`), `#rrggbb`, or `[r, g, b]`. A show with a `seed` option picks new random colors each run unless you set the seed; the seed in use is printed (or logged by the runner), so a combination you like can be pinned. To add options to a show, define `OPTIONS = {...}` and `render(t, xyz, meta, opts)` (see `shows/__init__.py`).
 
 ```bash
 python3 play.py --list
 python3 play.py sequence --preview              # to the browser preview
 python3 play.py sequence                        # to the sculpture (wled.host)
 python3 play.py twinkle --also 127.0.0.1        # sculpture + preview together
+python3 play.py dna_strand -o motion=up -o bpm=60 -o rod=white -o colors=red,blue,gold,green
+python3 play.py dna_strand -o palette=classic -o sequence=GATTACA
 ```
 
 To write a new show, start the preview, pick the show in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
@@ -51,7 +55,7 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 - Drag to rotate, scroll to zoom, double-click to reset. Front / 3/4 / Top views, plus auto-spin.
 - Hover a bulb to see its index, output/light, strand, base pair, part, slot, and current RGB.
 - The status chip shows live/idle, fps, the sender's address, and DDP sequence gaps. After 2.5 s without packets the frame dims: that's when the real sculpture would fall back to its WLED effect.
-- **Source** menu: "DDP input" (default) or any show in `shows/`, rendered locally with live reload. `--show NAME` starts on one.
+- **Source** menu: "DDP input" (default) or any show in `shows/`, rendered locally with live reload. `--show NAME` starts on one. Local shows run with default options; **Restart** re-rolls a random seed (new colors for `dna_strand`). For other options, use `play.py <show> --preview -o ...`.
 - Options: `--ddp-port`, `--http-port`, `--bind 127.0.0.1` (local only; the default 0.0.0.0 accepts DDP from the LAN). Only one program can hold udp/4048 at a time.
 
 ## Runner (scheduled shows)

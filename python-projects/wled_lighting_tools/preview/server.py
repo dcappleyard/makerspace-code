@@ -153,7 +153,7 @@ class SourceControl:
 
     def restart(self):
         if self.thread:
-            self.thread.player.restart()
+            self.thread.player.restart(reroll=True)    # new colors for shows with a random seed
 
 
 def udp_loop(fb, bind, port):

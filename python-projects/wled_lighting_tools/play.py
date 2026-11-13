@@ -6,6 +6,7 @@
     python3 play.py sequence --preview               # to the browser preview on this machine
     python3 play.py twinkle --also 127.0.0.1         # sculpture + preview at once
     python3 play.py ring_spin --preview --reload     # re-import the show when its file changes
+    python3 play.py dna_strand -o motion=up -o rod=white   # show options (see the show's OPTIONS)
 
 Streams until Ctrl-C (or --duration); WLED reverts to its own effect ~2.5 s later.
 """
@@ -34,12 +35,16 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0, help="brightness scale 0-1 (default 1)")
     ap.add_argument("--duration", type=float, help="stop after this many seconds")
     ap.add_argument("--reload", action="store_true", help="re-import the show file when it changes")
+    ap.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE",
+                    help="show option (repeatable), e.g. -o colors=red,blue,gold,green")
     a = ap.parse_args()
 
     if a.list or not a.show:
         for name in shows.available():
-            desc = getattr(shows.load(name), "DESCRIPTION", "")
-            print(f"  {name:16s} {desc}")
+            mod = shows.load(name)
+            print(f"  {name:16s} {getattr(mod, 'DESCRIPTION', '')}")
+            if getattr(mod, "OPTIONS", None):
+                print(f"  {'':16s} options: " + ", ".join(f"{k}={v}" for k, v in mod.OPTIONS.items()))
         return
 
     if a.show not in shows.available():
@@ -53,7 +58,12 @@ def main():
     fps = a.fps or cfg.get("fps", 40)
     port = cfg.get("ddp_port", 4048)
 
-    player = shows.Player(a.show, Layout.load(), scale=max(0.0, min(1.0, a.scale)), reload=a.reload)
+    try:
+        options = dict(shows.parse_option(o) for o in a.option)
+        player = shows.Player(a.show, Layout.load(), scale=max(0.0, min(1.0, a.scale)),
+                              reload=a.reload, options=options)
+    except ValueError as e:
+        sys.exit(str(e))
     senders = [DDPSender(h, port) for h in targets]
 
     class Fanout:
@@ -72,6 +82,8 @@ def main():
 
     st = Streamer(Fanout(), source, fps)
     print(f"playing '{a.show}' to {', '.join(targets)} at {fps:g} fps; Ctrl-C to stop")
+    if player.raw_opts:
+        print("  options: " + ", ".join(f"{k}={v}" for k, v in player.raw_opts.items()))
     st.start()
     t_end = time.monotonic() + a.duration if a.duration else None
     try:
