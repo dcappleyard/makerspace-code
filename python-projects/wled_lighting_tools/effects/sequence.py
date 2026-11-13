@@ -5,7 +5,7 @@ common A/T/G/C convention (A green, T red, G yellow, C blue).
 """
 import numpy as np
 
-from shows._util import pulse, rgb
+from effects._util import pulse, rgb
 
 DESCRIPTION = "Nucleotide colors per base pair with a read head scanning upward"
 

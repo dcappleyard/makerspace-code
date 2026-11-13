@@ -29,7 +29,7 @@ Options (play.py -o key=value, or options: in a rotation entry):
 """
 import numpy as np
 
-from shows._util import color, hash01, hsv, smoothstep
+from effects._util import color, hash01, hsv, smoothstep
 
 DESCRIPTION = "Random-sequence base pairs (A-T, G-C) in 4 colors; static or flowing"
 

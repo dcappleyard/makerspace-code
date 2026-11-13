@@ -23,14 +23,25 @@
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
-    padding: 14px 16px; max-width: 1200px; margin: 0 auto; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+  header { position: sticky; top: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .hrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding-top: 12px; }
   h1 { font-size: 18px; margin: 0; font-weight: 600; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
-    margin: 0 0 10px; font-weight: 600; }
-  main { max-width: 1200px; margin: 0 auto; padding: 0 16px 32px; display: grid; gap: 14px;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+  nav.tabs { display: flex; gap: 4px; margin-top: 10px; overflow-x: auto; }
+  nav.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+    padding: 8px 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav.tabs button.dirty::after { content: " •"; color: var(--warn); }
+  .nowbar { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 8px 16px 10px; }
+  .nowbar .show { font-weight: 600; }
+  .nowbar .fx { overflow-wrap: anywhere; }
+  .nowbar .left { color: var(--muted); font-size: 13px; }
+  .nowbar button { margin-left: auto; }
+  main { padding: 14px 0 90px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
   .wide { grid-column: 1 / -1; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -38,7 +49,7 @@
     gap: 6px; align-items: center; background: var(--panel); white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .ok .dot { background: var(--on); } .warn .dot { background: var(--warn); } .bad .dot { background: var(--bad); }
-  .muted { color: var(--muted); }
+  .muted { color: var(--muted); } .small { font-size: 12px; }
   .big { font-size: 22px; font-weight: 600; overflow-wrap: anywhere; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 10px 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
@@ -55,14 +66,18 @@
   input[type=range] { accent-color: var(--accent); flex: 1; min-width: 120px; }
   input[type=checkbox] { accent-color: var(--accent); }
   label.inline { display: inline-flex; gap: 6px; align-items: center; }
-  .view { position: relative; height: 420px; border-radius: 10px; overflow: hidden; background: #07080b; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .view { position: relative; height: min(70vh, 620px); min-height: 320px; border-radius: 10px; overflow: hidden; background: #07080b; }
   .view canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
   .view .overlay { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; gap: 6px;
     flex-wrap: wrap; align-items: center; pointer-events: none; }
   .view .overlay > * { pointer-events: auto; }
-  .view .overlay button { background: rgba(23,26,32,.85); color: #e7e9ee; border-color: #2a2e37; }
-  .view .overlay .chip { background: rgba(23,26,32,.85); color: #e7e9ee; border-color: #2a2e37; }
+  .view .overlay button, .view .overlay .chip { background: rgba(23,26,32,.85); color: #e7e9ee; border-color: #2a2e37; }
   .view .overlay button.on { color: #6aa8ff; border-color: #6aa8ff; }
+  .banner { border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
   #tip { position: fixed; pointer-events: none; display: none; background: #171a20; color: #e7e9ee;
     border: 1px solid #2a2e37; border-radius: 6px; padding: 6px 9px; white-space: nowrap; font-size: 12px; z-index: 5; }
   #tip .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px;
@@ -75,75 +90,152 @@
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   td, th { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   th { color: var(--muted); font-weight: 500; }
-  .rot { list-style: none; margin: 0; padding: 0; }
-  .rot li { border: 1px solid var(--line); border-radius: 10px; padding: 8px; margin: 6px 0; }
-  .rot .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .rot .num { color: var(--muted); width: 1.6em; text-align: right; }
-  .rot select { flex: 1; min-width: 140px; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { border: 1px solid var(--line); border-radius: 10px; padding: 8px; margin: 6px 0; }
+  .list .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .list .num { color: var(--muted); width: 1.6em; text-align: right; }
+  .list select { flex: 1; min-width: 140px; }
   .win { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
   .win input { flex: 1; min-width: 110px; }
   .msg { border-radius: 8px; padding: 8px 10px; margin: 8px 0; white-space: pre-wrap; font-size: 13px; }
   .msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   .msg.okm { background: color-mix(in srgb, var(--on) 12%, transparent); color: var(--on); }
-  .msg[hidden] { display: none; }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px 14px; }
-  .grid2 label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
-  .grid2 label.inline { flex-direction: row; color: var(--text); font-size: 14px; align-self: end; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 14px; }
+  .fields label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  .fields input, .fields select { width: 100%; }
+  .checks { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
   pre.log { margin: 0; max-height: 280px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, monospace;
     white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
-  .sticky { position: sticky; bottom: 0; background: var(--panel); padding-top: 8px; border-top: 1px solid var(--line); }
-  .dirty { color: var(--warn); font-size: 12px; }
-  .split { display: grid; gap: 14px 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  @media (max-width: 700px) { .split { grid-template-columns: minmax(0, 1fr); } }
-  .checks { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
+  .builder { display: grid; gap: 14px; grid-template-columns: 240px minmax(0, 1fr); }
+  @media (max-width: 760px) { .builder { grid-template-columns: minmax(0, 1fr); } }
+  .showlist { list-style: none; margin: 0 0 8px; padding: 0; }
+  .showitem { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 1px; margin: 4px 0; }
+  .showitem .nm { font-weight: 600; }
+  .showitem.active { border-color: var(--accent); }
+  .namerow input { font-size: 18px; font-weight: 600; flex: 1; min-width: 140px; }
+  .savebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--panel);
+    border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0,0,0,.08); }
+  .savebar .wrap { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding-top: 10px; padding-bottom: 10px; }
+  .savebar .msg { margin: 0; flex: 1 1 100%; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Helix Sculpture</h1>
-  <div class="chips">
-    <span class="chip" id="stateChip"><span class="dot"></span><span id="stateText">connecting…</span></span>
-    <span class="chip" id="wledChip"><span class="dot"></span><span id="wledText">WLED</span></span>
+  <div class="wrap">
+    <div class="hrow">
+      <h1>Helix Sculpture</h1>
+      <div class="chips">
+        <span class="chip" id="stateChip"><span class="dot"></span><span>connecting…</span></span>
+        <span class="chip" id="wledChip"><span class="dot"></span><span>WLED</span></span>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button id="tabbtn-scheduler" role="tab">Scheduler</button>
+      <button id="tabbtn-preview" role="tab">Preview</button>
+      <button id="tabbtn-builder" role="tab">Show builder</button>
+    </nav>
+  </div>
+  <div class="wrap nowbar" aria-live="polite">
+    <span class="show" id="nbShow">—</span><span class="muted" id="nbSep">›</span><span class="fx" id="nbEffect"></span>
+    <span class="left" id="nbLeft"></span>
+    <button class="small" id="nbSkip">Skip effect</button>
   </div>
 </header>
 
-<main>
-  <section class="card">
-    <h2>Now</h2>
-    <div class="big" id="nowShow">—</div>
-    <div class="muted" id="nowSub"></div>
-    <div class="msg err" id="showErr" hidden></div>
-    <dl class="kv" id="nowKv"></dl>
+<main class="wrap">
+  <!-- ========================================================== Scheduler -->
+  <section id="tab-scheduler" class="grid" role="tabpanel">
+    <div class="card">
+      <h2>Now</h2>
+      <div class="big" id="nowShow">—</div>
+      <div class="muted" id="nowSub"></div>
+      <div class="msg err" id="showErr" hidden></div>
+      <dl class="kv" id="nowKv"></dl>
+      <div class="row">
+        <button id="btnOn">Turn on</button>
+        <select id="onShow" aria-label="Show to turn on with"></select>
+        <input type="number" id="onMinutes" min="1" value="60" aria-label="Minutes to stay on (outside a window)">
+        <span class="muted">min</span>
+      </div>
+      <div class="row">
+        <button id="btnOff">Off until next window</button>
+        <button id="btnResume" hidden>Back to schedule</button>
+      </div>
+      <div class="row">
+        <span>Brightness</span>
+        <input type="range" id="scale" min="0" max="1" step="0.01" aria-label="Brightness of the current show">
+        <span id="scaleVal" class="muted" style="width:3em">—</span>
+      </div>
+      <h3>Play now</h3>
+      <div class="row">
+        <select id="playItem" aria-label="Show or effect to play"></select>
+        <input type="number" id="playMinutes" min="0.5" step="0.5" placeholder="min" aria-label="Minutes">
+        <button class="primary" id="btnPlay">Play</button>
+      </div>
+      <div class="desc" id="playDesc"></div>
+      <div class="opts" id="playOpts"></div>
+      <div class="msg err" id="ctlErr" hidden></div>
+    </div>
 
-    <div class="row">
-      <button id="btnSkip">Skip to next</button>
-      <button id="btnOn">Turn on</button>
-      <input type="number" id="onMinutes" min="1" value="60" title="minutes, outside a window" aria-label="Minutes to stay on">
-      <span class="muted">min</span>
-      <button id="btnOff">Off until next window</button>
-      <button id="btnResume" hidden>Back to schedule</button>
-    </div>
-    <div class="row">
-      <span>Brightness</span>
-      <input type="range" id="scale" min="0" max="1" step="0.01" aria-label="Show brightness">
-      <span id="scaleVal" class="muted" style="width:3em">—</span>
-      <button class="small" id="btnScaleSave" title="Save this brightness to config.yaml">Save</button>
+    <div class="card">
+      <h2>On windows</h2>
+      <div class="desc">"HH:MM", or sunrise / sunset / dawn / dusk / noon with an offset, e.g. "sunset - 15m". An off time at or before the on time means the next day. Each window plays a show.</div>
+      <div class="msg err" id="legacyNote" hidden>This config is in the old single-rotation format; it's shown here as the show "evening" and will be saved in the new format.</div>
+      <div id="windows"></div>
+      <button class="small" id="addWin">+ window</button>
+      <h3>Next 7 days</h3>
+      <table><thead><tr><th>Day</th><th>Sunset</th><th>On</th></tr></thead><tbody id="sched"></tbody></table>
     </div>
 
-    <h2 style="margin-top:16px">Play now</h2>
-    <div class="row">
-      <select id="playItem" aria-label="Show to play"></select>
-      <input type="number" id="playMinutes" min="0.5" step="0.5" placeholder="min" aria-label="Minutes">
-      <button class="primary" id="btnPlay">Play</button>
+    <div class="card wide">
+      <h2>Defaults</h2>
+      <div class="fields">
+        <label>Default show<select id="defaultShow"></select></label>
+        <label>WLED brightness (0–255)<input type="number" step="1" min="0" max="255" data-k="brightness"></label>
+        <label>Show brightness (scale 0–1)<input type="number" step="0.05" min="0" max="1" data-k="scale"></label>
+        <label>Minutes per effect<input type="number" step="0.5" min="0.5" data-k="minutes_each"></label>
+        <label>Crossfade seconds<input type="number" step="0.5" min="0" data-k="transition_seconds"></label>
+      </div>
+      <div class="checks">
+        <label class="inline"><input type="checkbox" data-k="shuffle"> Shuffle</label>
+        <label class="inline" title="Every minute, turn WLED back on if something turned it off mid-window"><input type="checkbox" data-k="reassert_on"> Re-assert on</label>
+      </div>
+      <div class="desc">Shows use these unless they set their own (Show builder tab). WLED brightness only affects WLED presets and WLED's own fallback.</div>
     </div>
-    <div class="desc" id="playDesc"></div>
-    <div class="opts" id="playOpts"></div>
-    <div class="msg err" id="ctlErr" hidden></div>
+
+    <div class="card wide">
+      <h2>Log</h2>
+      <pre class="log" id="log"></pre>
+    </div>
   </section>
 
-  <section class="card">
-    <h2>Live view</h2>
-    <div class="view" id="viewBox">
+  <!-- ========================================================== Preview -->
+  <section id="tab-preview" class="card" role="tabpanel" hidden>
+    <div class="row" style="justify-content:space-between">
+      <div class="seg" role="group" aria-label="Preview source">
+        <button id="modeLive" class="on">Live</button>
+        <button id="modeAud">Audition</button>
+      </div>
+      <span class="muted small">Drag to rotate, scroll to zoom.</span>
+    </div>
+    <div class="banner" id="audBanner" hidden>Audition plays in this browser only — the sculpture isn't affected.</div>
+    <div id="audPanel" hidden>
+      <div class="row">
+        <select id="audItem" aria-label="Effect or show to audition"></select>
+        <span class="row" id="audSecsRow" style="margin:0">
+          <input type="number" id="audSecs" min="3" step="1" value="20" aria-label="Seconds per effect">
+          <span class="muted">s per effect</span>
+        </span>
+        <button class="primary" id="audPlay">Play</button>
+        <button id="audNext">Next</button>
+        <button id="audStop">Stop</button>
+      </div>
+      <div class="desc" id="audDesc"></div>
+      <div class="opts" id="audOpts"></div>
+      <div class="muted small" id="audNow"></div>
+      <div class="msg err" id="audErr" hidden></div>
+    </div>
+    <div class="view" id="viewBox" style="margin-top:8px">
       <canvas id="c"></canvas>
       <div class="overlay">
         <span class="chip" id="liveChip">idle</span>
@@ -153,58 +245,65 @@
         <button class="small" id="btnSpin">Spin</button>
       </div>
     </div>
-    <div class="muted" style="font-size:12px;margin-top:6px">What the runner is sending right now. Drag to rotate, scroll to zoom.</div>
   </section>
 
-  <section class="card wide">
-    <h2>Settings <span class="dirty" id="dirty" hidden>· unsaved changes</span></h2>
-    <div class="split">
-      <div>
-        <h2 style="margin-top:4px">On windows</h2>
-        <div class="desc">"HH:MM", or sunrise / sunset / dawn / dusk / noon with an offset, e.g. "sunset - 15m". An off time at or before the on time means the next day.</div>
-        <div id="windows"></div>
-        <button class="small" id="addWin">+ window</button>
-      </div>
-      <div>
-        <h2 style="margin-top:4px">Next 7 days</h2>
-        <table><thead><tr><th>Day</th><th>Sunset</th><th>On</th></tr></thead><tbody id="sched"></tbody></table>
-      </div>
-    </div>
-
-    <h2 style="margin-top:16px">General</h2>
-    <div class="grid2" id="scalars">
-      <label>Show brightness (scale 0–1)<input type="number" step="0.05" min="0" max="1" data-k="scale"></label>
-      <label>WLED brightness (0–255)<input type="number" step="1" min="0" max="255" data-k="brightness"></label>
-      <label>Minutes per show<input type="number" step="0.5" min="0.5" data-k="minutes_each"></label>
-      <label>Crossfade seconds<input type="number" step="0.5" min="0" data-k="transition_seconds"></label>
-    </div>
-    <div class="checks" id="checks">
-      <label class="inline"><input type="checkbox" data-k="shuffle"> Shuffle</label>
-      <label class="inline" title="Every minute, turn WLED back on if something turned it off mid-window"><input type="checkbox" data-k="reassert_on"> Re-assert on</label>
-    </div>
-
-    <h2 style="margin-top:16px">Rotation</h2>
-    <ul class="rot" id="rot"></ul>
-    <button class="small" id="addRot">+ entry</button>
-
-    <div class="sticky">
-      <div class="msg err" id="setErr" hidden></div>
-      <div class="msg okm" id="setOk" hidden></div>
+  <!-- ========================================================== Show builder -->
+  <section id="tab-builder" class="builder" role="tabpanel" hidden>
+    <div class="card">
+      <h2>Shows</h2>
+      <ul class="showlist" id="showList"></ul>
       <div class="row">
-        <button class="primary" id="btnSave">Save &amp; apply</button>
-        <button id="btnRevert">Revert</button>
+        <button class="small" id="newShow">+ New</button>
+        <button class="small" id="dupShow">Duplicate</button>
       </div>
     </div>
-  </section>
+    <div class="card">
+      <div id="showEmpty" class="muted">No show selected.</div>
+      <div id="showEditor" hidden>
+        <div class="row namerow">
+          <input id="showName" aria-label="Show name" spellcheck="false">
+          <button id="auditionShow">Audition</button>
+          <button id="playShow">Play on sculpture now</button>
+          <button id="delShow">Delete</button>
+        </div>
+        <div class="muted small" id="showUsed"></div>
+        <div class="msg err" id="bErr" hidden></div>
 
-  <section class="card wide">
-    <h2>Log</h2>
-    <pre class="log" id="log"></pre>
+        <h3>This show's settings <span class="muted small">(blank = default)</span></h3>
+        <div class="fields" id="showOverrides">
+          <label>Brightness (scale 0–1)<input type="number" step="0.05" min="0" max="1" data-k="scale"></label>
+          <label>Minutes per effect<input type="number" step="0.5" min="0.5" data-k="minutes_each"></label>
+          <label>Crossfade seconds<input type="number" step="0.5" min="0" data-k="transition_seconds"></label>
+          <label>Shuffle<select data-k="shuffle"><option value="">global</option><option value="true">on</option><option value="false">off</option></select></label>
+        </div>
+
+        <h3>Effects</h3>
+        <ul class="list" id="fxList"></ul>
+        <div class="row">
+          <button class="small" id="addFx">+ effect</button>
+          <span class="muted small" id="fxTotal"></span>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
+
+<div class="savebar" id="saveBar" hidden>
+  <div class="wrap">
+    <span>Unsaved changes</span>
+    <button class="primary" id="btnSave">Save &amp; apply</button>
+    <button id="btnRevert">Revert</button>
+    <div class="msg err" id="setErr" hidden></div>
+    <div class="msg okm" id="setOk" hidden></div>
+  </div>
+</div>
 <div id="tip"></div>
 
 <script src="/sculpture.js"></script>
-<script src="/static/dashboard.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/scheduler.js"></script>
+<script src="/static/preview.js"></script>
+<script src="/static/builder.js"></script>
+<script>App.start();</script>
 </body>
 </html>

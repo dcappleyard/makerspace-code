@@ -1,7 +1,7 @@
 """Pulses flowing along each strand's wire, from the plug end up."""
 import numpy as np
 
-from shows._util import pulse, rgb, wrap
+from effects._util import pulse, rgb, wrap
 
 DESCRIPTION = "Pulses travel up each strand in wiring order, one color per strand"
 

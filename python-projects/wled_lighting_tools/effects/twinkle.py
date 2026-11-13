@@ -1,7 +1,7 @@
 """Warm-white twinkle over a dim glow."""
 import numpy as np
 
-from shows._util import hash01, rgb
+from effects._util import hash01, rgb
 
 DESCRIPTION = "Calm warm-white twinkle"
 

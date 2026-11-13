@@ -1,26 +1,26 @@
-"""Show modules and the loader.
+"""Effect modules and the loader.
 
-A show is a module in this folder with
+An effect is a module in this folder with
 
     def render(t: float, xyz: np.ndarray, meta: Layout) -> np.ndarray   # (N, 3)
 
-`t` is seconds since the show started, `xyz` is meta.xyz (inches, z up), and
+`t` is seconds since the effect started, `xyz` is meta.xyz (inches, z up), and
 `meta` is a layout.Layout with per-pixel labels (strand, base_pair, part,
 slot, masks like meta.ring) and derived geometry (theta, h, ...). Return
 uint8 RGB, or floats in 0..1 (the player converts). Keep render a pure
 function of t so it looks the same on hardware and in the preview; for
-randomness use shows._util.hash01 instead of random.
+randomness use effects._util.hash01 instead of random.
 
 Optional module attributes: DESCRIPTION (one line).
-Files starting with "_" are helpers, not shows.
+Files starting with "_" are helpers, not effects.
 
-Options: a show that takes settings defines OPTIONS = {name: default} and
+Options: an effect that takes settings defines OPTIONS = {name: default} and
 render(t, xyz, meta, opts). Options come from play.py (-o key=value), a
 rotation entry's options: in config.yaml, or the defaults. An optional
 prepare(opts) -> opts parses/validates them once (raise ValueError for bad
 ones) instead of on every frame. An option "seed" left at None gets a random
 value per run (printed by play.py, re-rolled by the preview's Restart), so a
-"random" show is still a pure function of t within a run.
+"random" effect is still a pure function of t within a run.
 """
 import importlib
 import pkgutil
@@ -38,9 +38,9 @@ def available():
 
 
 def load(name):
-    mod = importlib.import_module(f"shows.{name}")
+    mod = importlib.import_module(f"effects.{name}")
     if not callable(getattr(mod, "render", None)):
-        raise ValueError(f"shows/{name}.py has no render(t, xyz, meta)")
+        raise ValueError(f"effects/{name}.py has no render(t, xyz, meta)")
     return mod
 
 
@@ -49,10 +49,10 @@ def path_of(name):
 
 
 class Player:
-    """Runs one show against the clock and returns DDP-ready frames.
+    """Runs one effect against the clock and returns DDP-ready frames.
 
     Used by play.py, the preview server, and (later) the runner. With
-    reload=True the show file is re-imported when it changes on disk. A show
+    reload=True the effect file is re-imported when it changes on disk. An effect
     that raises keeps its last good frame, and the error is kept in .error.
     """
 
@@ -74,11 +74,11 @@ class Player:
         defaults = getattr(mod, "OPTIONS", None)
         if defaults is None:
             if self.options:
-                raise ValueError(f"show '{self.name}' takes no options")
+                raise ValueError(f"effect '{self.name}' takes no options")
             return {}, None
         unknown = set(self.options) - set(defaults)
         if unknown:
-            raise ValueError(f"show '{self.name}' has no option(s) {', '.join(sorted(unknown))}; "
+            raise ValueError(f"effect '{self.name}' has no option(s) {', '.join(sorted(unknown))}; "
                              f"it takes {', '.join(defaults)}")
         raw = {**defaults, **self.options}
         if "seed" in raw and raw["seed"] is None:

@@ -20,20 +20,20 @@ python3 pixel_map.py --svg pixel_map_check.svg
 
 Writes `pixels.csv` from the geometry constants at the top of `pixel_map.py`, plus an optional top/side-view check plot. Edit the constants and rerun; don't hand-edit the CSV.
 
-## Shows
+## Effects
 
-A show is a module in `shows/` with `render(t, xyz, meta)`, returning `(200, 3)` RGB as uint8 or floats in 0..1. `meta` is a `layout.Layout`:
+An effect is one animation: a module in `effects/` with `render(t, xyz, meta)`, returning `(200, 3)` RGB as uint8 or floats in 0..1. `meta` is a `layout.Layout`:
 
 - **Labels:** `strand_id`, `base_pair`, `part`, `slot`.
 - **Masks:** `stem`, `ring`, `rod`.
 - **Geometry:** `theta`, `r`, `h` (0 bottom to 1 top), `lollipop_theta`, `ring_pos`, `strand_pos`, `bp_frac`.
 
-Helpers are in `shows/_util.py` (`hsv`, `rgb`, `color`, `pulse`, `wrap`, `hash01`, ...). Keep `render` a pure function of `t`: use `hash01` for randomness.
+Helpers are in `effects/_util.py` (`hsv`, `rgb`, `color`, `pulse`, `wrap`, `hash01`, ...). Keep `render` a pure function of `t`: use `hash01` for randomness.
 
-Some shows take options (`play.py --list` shows them and their defaults). Pass them with `-o key=value`, or in the rotation as `{show: dna_strand, options: {...}}`. Colors are names (`red`, `gold`, `warmwhite`, ... see `_util.NAMED_COLORS`), `#rrggbb`, or `[r, g, b]`. A show with a `seed` option picks new random colors each run unless you set the seed; the seed in use is printed (or logged by the runner), so a combination you like can be pinned. To add options to a show, define `OPTIONS = {...}` and `render(t, xyz, meta, opts)` (see `shows/__init__.py`).
+Some effects take options (`play.py --list` shows the effects and their defaults). Pass them with `-o key=value`, or in a show's effect list as `{effect: dna_strand, options: {...}}`. Colors are names (`red`, `gold`, `warmwhite`, ... see `_util.NAMED_COLORS`), `#rrggbb`, or `[r, g, b]`. An effect with a `seed` option picks new random colors each run unless you set the seed; the seed in use is printed (or logged by the runner), so a combination you like can be pinned. To add options to an effect, define `OPTIONS = {...}` and `render(t, xyz, meta, opts)` (see `effects/__init__.py`). An optional `prepare(opts)` validates them, and `DESCRIPTION` is shown in the menus. Files starting with `_` are helpers, not effects.
 
 ```bash
-python3 play.py --list
+python3 play.py --list                          # list effects and their options
 python3 play.py sequence --preview              # to the browser preview
 python3 play.py sequence                        # to the sculpture (wled.host)
 python3 play.py twinkle --also 127.0.0.1        # sculpture + preview together
@@ -41,7 +41,7 @@ python3 play.py dna_strand -o motion=up -o bpm=60 -o rod=white -o colors=red,blu
 python3 play.py dna_strand -o palette=classic -o sequence=GATTACA
 ```
 
-To write a new show, start the preview, pick the show in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
+To write a new effect, start the preview, pick the effect in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
 
 ## Browser preview
 
@@ -55,48 +55,53 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 - Drag to rotate, scroll to zoom, double-click to reset. Front / 3/4 / Top views, plus auto-spin.
 - Hover a bulb to see its index, output/light, strand, base pair, part, slot, and current RGB.
 - The status chip shows live/idle, fps, the sender's address, and DDP sequence gaps. After 2.5 s without packets the frame dims: that's when the real sculpture would fall back to its WLED effect.
-- **Source** menu: "DDP input" (default) or any show in `shows/`, rendered locally with live reload. `--show NAME` starts on one. Local shows run with default options; **Restart** re-rolls a random seed (new colors for `dna_strand`). For other options, use `play.py <show> --preview -o ...`.
+- **Source** menu: "DDP input" (default) or any effect in `effects/`, shown as "Effect" in the menu and rendered locally with live reload. `--effect NAME` starts on one (the old `--show` still works). Local effects run with default options; **Restart** re-rolls a random seed (new colors for `dna_strand`). For other options, use `play.py <effect> --preview -o ...`.
 - Options: `--ddp-port`, `--http-port`, `--bind 127.0.0.1` (local only; the default 0.0.0.0 accepts DDP from the LAN). Only one program can hold udp/4048 at a time.
 
 ## Runner (scheduled shows)
 
-`runner.py` turns WLED on at each window's start (`{"on": true, "bri": N}`), plays the rotation, and turns it off at the window's end. The schedule, rotation, and brightness live in `config.yaml` (see `config.example.yaml`).
+`runner.py` turns WLED on at each window's start (`{"on": true, "bri": N}`), plays that window's show, and turns it off at the window's end. The schedule, shows, and brightness live in `config.yaml` (see `config.example.yaml`).
 
 ```bash
-python3 runner.py --schedule               # next 7 days: sunrise/sunset and on-windows
-python3 runner.py --preview --force-on     # rotation into the local preview now, no WLED API calls
-python3 runner.py --force-on               # rotation on the sculpture now, ignoring the schedule
+python3 runner.py --schedule               # next 7 days: sunrise/sunset, on-windows and the show for each
+python3 runner.py --preview --force-on     # default show into the local preview now, no WLED API calls
+python3 runner.py --force-on               # default show on the sculpture now, ignoring the schedule
 python3 runner.py                          # normal scheduled operation (what the Docker container runs)
 ```
 
-- **Rotation entries:** a show name, `wled:<preset id>`, or `{show: name, minutes: N}`. For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
-- **Failures:** if WLED is unreachable, API calls are retried every 30 s and streaming carries on. A show that errors keeps its last good frame. Invalid rotation entries are logged and skipped.
+- **Shows:** a show is a named list of effects, defined in the `shows:` section of the config (`morning`, `evening`, ...). Each window has an optional `show:`; `schedule.default_show` plays for windows without one, and for the dashboard's "Turn on". If back-to-back windows want different shows, the runner crossfades into the new show without turning off.
+- **Show entries:** an effect name, `wled:<preset id>`, or `{effect: name, minutes: N, options: {...}}` (the old `{show: name}` key is still read). For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
+- **Per-show overrides:** a show can set `scale`, `minutes_each`, `shuffle` and `transition_seconds`. Anything it leaves out comes from the `schedule:` globals.
+- **Old configs:** a config with only `schedule.rotation` (no `shows:`) loads as one show named `evening`, which is the default. The dashboard's first save writes the new shape and drops `schedule.rotation`.
+- **Failures:** if WLED is unreachable, API calls are retried every 30 s and streaming carries on. An effect that errors keeps its last good frame. Invalid show entries are logged and skipped.
 - **Stopping mid-window** (Ctrl-C, SIGTERM, crash) only stops streaming. WLED falls back to its own effect ~2.5 s later, which is the intended fallback.
 - **YAML note:** PyYAML reads a bare `on:` key as boolean `true`. The schedule parser accepts that, so `on:` / `off:` work as written.
 
 ### Dashboard
 
-The runner serves a web dashboard at `http://<pi>:8049/` (`--web-port`, 0 turns it off). It runs inside the runner process, so it shows and controls what is actually playing.
+The runner serves a web dashboard at `http://<pi>:8049/` (`--web-port`, 0 turns it off). It runs inside the runner process, so it shows and controls what is actually playing. It has three tabs (`#scheduler`, `#preview`, `#builder` in the URL, so a reload stays on the tab). They share a header with status chips, a now-playing bar (show › effect, time left, **Skip effect**), and one **Save & apply** bar for unsaved changes across all tabs.
 
-- **Now:** the current show and its options, time left, what's next, the window, today's sunrise and sunset, and whether WLED is reachable.
-- **Controls:**
-  - skip to the next show
-  - play a show (with options) or a WLED preset now, for N minutes, then return to the rotation
-  - turn on now (for N minutes outside a window)
-  - off until the next window
-  - back to the schedule
+- **Scheduler:**
+  - now playing, the window, sun times, and whether WLED is reachable
+  - turn on now with a chosen show, for N minutes
+  - off until the next window, or back to the schedule
+  - play now: a show (until the window ends, or for N minutes), or one effect (with options) or WLED preset once
   - a live brightness slider (applies `scale` immediately; **Save** writes it to the config)
+  - on/off windows, each with a show picker, and a 7-day preview listing each window's show
+  - defaults: default show, WLED brightness, default scale / minutes / crossfade / shuffle, re-assert
+  - the runner's last ~150 log lines
 
-  These overrides live in memory, so a restart drops them.
-- **Live view:** the frames the runner is sending, on the same 3D model as the preview (`web/static/sculpture.js` is shared by both pages). It shows nothing while a `wled:<id>` preset runs, since WLED draws that itself.
-- **Settings:** the `schedule:` section of the config:
-  - on/off windows, with a 7-day preview
-  - brightness, scale, minutes per show, crossfade, shuffle and re-assert
-  - the rotation (order, minutes, per-show options)
+  The play, on and off overrides live in memory, so a restart drops them.
+- **Preview:** the same 3D model as the standalone preview (`web/static/sculpture.js` is shared by both pages), with a **Live / Audition** switch. Live shows the frames the runner is sending; it shows nothing while a `wled:<id>` preset runs, since WLED draws that itself. Audition renders any effect (with options) or any show in the browser only, and never sends it to the sculpture. A seconds-per-effect setting lets you skim a whole show. Audition runs on its own player thread and stops 10 s after the last viewer leaves.
+- **Show builder:** the list of shows (new, duplicate, rename, delete) and an editor for the selected one.
+  - Renaming updates the windows and default that use it. Delete is refused while a window or the default uses the show.
+  - Per-show settings: blank means use the default.
+  - Effects list: reorder, minutes, per-effect options, and `wled:<id>` presets, with the total time for one pass.
+  - **Audition** opens the Preview tab with your unsaved edits. **Play on sculpture now** needs the show saved first.
 
-  Changes are checked before saving: window expressions are parsed, and show options go through the show's own `prepare()`. They're then written back with ruamel.yaml, so comments and order survive, and applied without restarting the stream. The previous file is kept as `config.yaml.bak`. `wled:` and `location:` stay hand-edited and need a restart.
-- **Log:** the runner's last ~150 log lines.
-- **Password:** set `ADMIN_PASSWORD` in `docker-compose.yml` to require HTTP Basic auth (any user name). Empty means open to the LAN.
+Changes are checked before saving: window expressions are parsed, and effect options go through the effect's own `prepare()`. They're then written back with ruamel.yaml (`schedule:` and `shows:`), so comments and order survive, and applied without restarting the stream; the current effect keeps playing if it's still in the show. The previous file is kept as `config.yaml.bak`. `wled:` and `location:` stay hand-edited and need a restart.
+
+**Password:** set `ADMIN_PASSWORD` in `docker-compose.yml` to require HTTP Basic auth (any user name). Empty means open to the LAN.
 
 To try the dashboard without the sculpture, run `python3 runner.py --preview --force-on` and open `http://localhost:8049/`.
 
@@ -149,6 +154,6 @@ Every pattern streams until Ctrl-C, and WLED goes back to its own effect ~2.5 s 
    - `python3 testpattern.py basepairs`: red at the bottom to violet at the top.
    - `python3 testpattern.py step --output 1`: one pixel at a time, with its labels printed. Enter = next, `b` = back, a number jumps to that index, `q` quits.
    - `python3 testpattern.py chase --speed 4`: the same walk, automated.
-5. **Brightness / power:** `python3 testpattern.py ramp --scale 1`. On this setup WLED's master brightness (`power on --bri N`) does **not** dim DDP; only `--scale` does. The runner's `schedule.scale` is the dimmer for shows.
+5. **Brightness / power:** `python3 testpattern.py ramp --scale 1`. On this setup WLED's master brightness (`power on --bri N`) does **not** dim DDP; only `--scale` does. The runner's `schedule.scale` (or a show's own `scale`) is the dimmer for effects.
 
 Other commands: `solid R G B`, `blank`, `power on|off [--bri N]`.

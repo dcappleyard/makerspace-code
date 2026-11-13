@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Show runner: streams the rotation to WLED during the scheduled windows.
+"""Show runner: streams shows to WLED during the scheduled windows.
 
     python3 runner.py                     # run per config.yaml (what the Docker container runs)
     python3 runner.py --schedule          # print the next 7 days of windows and exit
     python3 runner.py --force-on          # ignore the schedule, run the rotation now
     python3 runner.py --preview --force-on   # DDP to the local preview, no WLED API calls
 
-At window start: {"on": true, "bri": N}, then stream the rotation. Rotation
-entries are shows (DDP) or "wled:<preset>" (DDP stops, WLED runs the preset).
+Each window plays a show (shows.py): a named list of effects (DDP) and
+"wled:<preset>" entries (DDP stops, WLED runs the preset). At window start:
+{"on": true, "bri": N}, then stream the show's effects in rotation.
 At window end: stop streaming, {"on": false}. If the runner stops mid-window,
 WLED falls back to its own effect after its realtime timeout (by design).
 """
@@ -23,14 +24,14 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-import shows
+import effects
 from layout import Layout
-from schedule import Schedule
+from schedule import Interval, Schedule
+from shows import load_shows, parse_entries
 from testpattern import load_config
 from wled.api import WLED
 from wled.ddp import DDPSender, Streamer
@@ -40,41 +41,6 @@ log = logging.getLogger("runner")
 
 TICK = 0.25              # control loop period, s
 RETRY = 30.0             # retry interval for failed WLED/network actions, s
-
-
-@dataclass
-class Entry:
-    kind: str            # "show" or "preset"
-    name: str            # show name, or preset id as str
-    minutes: float
-    options: dict = None  # show options (rotation entry's options:)
-
-    def __str__(self):
-        return self.name if self.kind == "show" else f"wled:{self.name}"
-
-
-def parse_rotation(sc):
-    default = float(sc.get("minutes_each", 10))
-    known = set(shows.available())
-    out = []
-    for item in sc.get("rotation", []):
-        minutes, options = default, None
-        if isinstance(item, dict):
-            minutes = float(item.get("minutes", default))
-            options = item.get("options")
-            item = f"wled:{item['wled']}" if "wled" in item else item.get("show")
-        item = str(item).strip()
-        if item.startswith("wled:"):
-            pid = item[5:].strip()
-            if not pid.isdigit():
-                log.error("rotation: bad preset %r, skipped", item)
-                continue
-            out.append(Entry("preset", pid, minutes))
-        elif item in known:
-            out.append(Entry("show", item, minutes, options))
-        else:
-            log.error("rotation: no show %r in shows/, skipped (have: %s)", item, ", ".join(sorted(known)))
-    return out
 
 
 class Mixer:
@@ -125,7 +91,7 @@ class Mixer:
         if player.error != self._logged_error:
             self._logged_error = player.error
             if player.error:
-                log.warning("show %s: %s", player.name, player.error)
+                log.warning("effect %s: %s", player.name, player.error)
 
 
 class Fanout:
@@ -172,9 +138,10 @@ class Runner:
         self.args = args
         self.cfg_path = cfg_path
         wc = cfg.get("wled", {})
+        self.show = None
         self._load_schedule(cfg)
-        if not self.rotation:
-            sys.exit("rotation is empty (check schedule.rotation in config.yaml)")
+        if not self.shows:
+            sys.exit("no shows with effects (check shows: in config.yaml)")
         self.fps = float(wc.get("fps", 40))
         self.port = int(wc.get("ddp_port", 4048))
 
@@ -188,6 +155,7 @@ class Runner:
 
         self.layout = Layout.load()
         self.mixer = Mixer(self.layout.n)
+        self.set_show(self.default_show, quiet=True)
         self.streamer = None
         self.fanout = None
         self.window = None           # (start, end) while on
@@ -204,7 +172,8 @@ class Runner:
         # and reads the status snapshot; runner state stays on the loop thread.
         self.cmds = queue.Queue()
         self._done = []              # (future, result, exception) to resolve after this tick
-        self.manual = None           # (start, end): "on now" outside the schedule
+        self.manual = None           # Interval: "on now" outside the schedule
+        self.show_override = None    # (show name, until or None): "play show now" inside a window
         self.suppress_until = None   # "off until next window": skip windows ending by then
         self._status = {}
         self._status_lock = threading.Lock()
@@ -212,16 +181,31 @@ class Runner:
         self.logbuf = None
 
     def _load_schedule(self, cfg):
-        """Everything that comes from the schedule: section (and location:)."""
+        """Everything that comes from schedule:, shows: (and location:)."""
         sc = cfg.get("schedule", {})
         self.cfg = cfg
-        self.schedule = Schedule.from_config(cfg)
-        self.rotation = parse_rotation(sc)
-        self.shuffle = bool(sc.get("shuffle", False))
-        self.fade_s = float(sc.get("transition_seconds", 2))
+        self.shows, self.default_show = load_shows(cfg)
+        self.schedule = Schedule.from_config(cfg, self.default_show)
         self.bri = sc.get("brightness")
-        self.scale = max(0.0, min(1.0, float(sc.get("scale", 1.0))))
         self.reassert = bool(sc.get("reassert_on", False))
+
+    @property
+    def rotation(self):
+        return self.show.entries if self.show else []
+
+    def set_show(self, name, quiet=False):
+        """Make `name` the current show (its effects, scale and crossfade).
+        The caller starts its first effect (next_entry(first=True))."""
+        sh = self.shows.get(name)
+        if sh is None:
+            log.warning("no show %r; playing %s", name, self.default_show)
+            sh = self.shows.get(self.default_show) or next(iter(self.shows.values()))
+        if not quiet:
+            log.info("show: %s (%s)", sh.name, ", ".join(map(str, sh.entries)))
+        self.show = sh
+        self.order, self.pos = [], -1
+        self.scale, self.fade_s = sh.scale, sh.fade_s
+        self.mixer.set_scale(sh.scale)
 
     # ------------------------------------------------------------ WLED API
     def api_call(self, action, desc, **state):
@@ -269,16 +253,18 @@ class Runner:
             self.pending_start = time.monotonic() + RETRY
             return
         self.window = win
-        log.info("window on: %s -> %s", fmt(win[0]), fmt(win[1]))
+        log.info("window on: %s -> %s (%s)", fmt(win.start), fmt(win.end), win.show)
         self.pending.pop("off", None)
         self.api_call("on", "on", **self._on_state())
         self.fanout = Fanout(senders)
         self.streamer = Streamer(self.fanout, self.mixer, self.fps)
         self.streamer.start()
+        self.set_show(win.show)
         self.next_entry(first=True)
 
     def end_window(self):
         log.info("window off")
+        self.show_override = None
         self.mixer.switch(None)
         self.stop_streaming()
         self.window = None
@@ -302,7 +288,7 @@ class Runner:
             self.pos += 1
             if self.pos >= len(self.order):
                 self.order = list(self.rotation)
-                if self.shuffle:
+                if self.show.shuffle:
                     random.shuffle(self.order)
                     if prev and len(self.order) > 1 and self.order[0] == prev:
                         self.order.append(self.order.pop(0))   # don't repeat across cycles
@@ -322,13 +308,13 @@ class Runner:
     def play(self, e, prev):
         if e is prev:          # single-entry rotation: just keep going
             return True
-        if e.kind == "show":
+        if e.kind == "effect":
             try:
-                player = shows.Player(e.name, self.layout, scale=self.scale, options=e.options)
+                player = effects.Player(e.name, self.layout, scale=self.scale, options=e.options)
             except Exception as ex:
-                log.error("show %s failed to load: %s", e.name, ex)
+                log.error("effect %s failed to load: %s", e.name, ex)
                 return False
-            fade = self.fade_s if (prev is not None and prev.kind == "show") else 0.0
+            fade = self.fade_s if (prev is not None and prev.kind == "effect") else 0.0
             self.mixer.switch(player, fade)
             self.pending.pop("preset", None)
             log.info("playing %s for %g min%s", e, e.minutes, f" (crossfade {fade:g}s)" if fade else "")
@@ -344,12 +330,14 @@ class Runner:
 
     # ------------------------------------------------------------ main loop
     def run(self):
-        log.info("rotation: %s", ", ".join(map(str, self.rotation)))
+        for sh in self.shows.values():
+            log.info("show %s%s: %s", sh.name, " (default)" if sh.name == self.default_show else "",
+                     ", ".join(map(str, sh.entries)))
         log.info("targets: %s%s", ", ".join(self.targets), " (preview: no WLED API)" if self.preview else "")
         if not self.args.force_on:
             nxt = self.schedule.active() or self.schedule.next_start()
             if nxt:
-                log.info("current/next window: %s -> %s", fmt(nxt[0]), fmt(nxt[1]))
+                log.info("current/next window: %s -> %s (%s)", fmt(nxt.start), fmt(nxt.end), nxt.show)
         if self.api is not None:
             threading.Thread(target=self._health_loop, name="wled-health", daemon=True).start()
         while not self.stopping.is_set():
@@ -359,8 +347,11 @@ class Runner:
                 self.start_window(win)
             elif not win and self.window is not None:
                 self.end_window()
-            elif win and win[1] != self.window[1]:
+            elif win and (win.end != self.window.end or win.show != self.window.show):
                 self.window = win            # e.g. a manual "on" running into a scheduled window
+                if win.show != self.show.name:
+                    self.set_show(win.show)  # next window wants another show: crossfade into it
+                    self.next_entry(first=True)
             if self.window is not None:
                 if self.streamer and self.streamer.error:
                     log.error("streamer died: %s; restarting it", self.streamer.error)
@@ -383,15 +374,26 @@ class Runner:
         dashboard's manual on/off overrides (which live in memory only)."""
         now = self.schedule.now()
         if self.args.force_on:
-            return (now, None)
+            win = Interval(self.window.start if self.window else now, None, self.default_show)
+        else:
+            win = self._scheduled_window(now)
+        if win and self.show_override is not None:
+            name, until = self.show_override
+            if (until is not None and now >= until) or name not in self.shows:
+                self.show_override = None
+            else:
+                win = win._replace(show=name)
+        return win
+
+    def _scheduled_window(self, now):
         win = self.schedule.active(now)
         if self.suppress_until is not None:
             if now >= self.suppress_until:
                 self.suppress_until = None
-            elif win and win[1] <= self.suppress_until:
+            elif win and win.end <= self.suppress_until:
                 win = None
         if self.manual is not None:
-            if now >= self.manual[1]:
+            if now >= self.manual.end:
                 self.manual = None
             elif not win:
                 win = self.manual
@@ -431,23 +433,27 @@ class Runner:
         log.info("dashboard: skip")
         self.next_entry()
 
-    def cmd_play(self, item, minutes=None, options=None):
-        """Play one show (or wled:<id>) now for `minutes`, then resume the rotation."""
-        minutes = float(minutes or self.cfg.get("schedule", {}).get("minutes_each", 10))
-        spec = {"show": item, "minutes": minutes, **({"options": options} if options else {})}
-        if str(item).startswith("wled:"):
-            spec = {"wled": str(item)[5:], "minutes": minutes}
-        entries = parse_rotation({"rotation": [spec]})
-        if not entries:
-            raise ValueError(f"unknown show or bad preset: {item}")
-        e = entries[0]
-        if e.kind == "show":       # surface bad options as an error, not a log line
-            shows.Player(e.name, self.layout, options=e.options)
+    def cmd_play(self, effect=None, show=None, item=None, minutes=None, options=None):
+        """Play now, then go back to the schedule:
+        - show: switch to that show (inside a window until it ends, or for
+          `minutes`; outside a window for `minutes`, default 60);
+        - effect (or wled:<id>): play it once for `minutes`, then the show resumes."""
+        if show is not None:
+            return self._play_show(str(show), minutes)
+        item = effect or item
+        if not item:
+            raise ValueError("say which effect or show to play")
+        minutes = float(minutes or self.show.minutes_each)
+        spec = ({"wled": str(item)[5:], "minutes": minutes} if str(item).startswith("wled:")
+                else {"effect": item, "minutes": minutes, **({"options": options} if options else {})})
+        e = parse_entries([spec], minutes, where="play", strict=True)[0]
+        if e.kind == "effect":     # surface bad options as an error, not a log line
+            effects.Player(e.name, self.layout, options=e.options)
         log.info("dashboard: play %s for %g min", e, minutes)
         if self.window is None:
             self.suppress_until = None
             now = self.schedule.now()
-            self.manual = (now, now + dt.timedelta(minutes=minutes))
+            self.manual = Interval(now, now + dt.timedelta(minutes=minutes), self.show.name)
             self.start_window(self.manual)
             if self.window is None:
                 raise ValueError("couldn't start streaming (see log)")
@@ -456,15 +462,35 @@ class Runner:
         self.entry = e
         self.entry_end = time.monotonic() + 60 * minutes
 
-    def cmd_on(self, minutes=None):
+    def _play_show(self, name, minutes):
+        if name not in self.shows:
+            raise ValueError(f"no show {name!r} (have: {', '.join(self.shows)})")
+        now = self.schedule.now()
+        log.info("dashboard: play show %s%s", name, f" for {minutes:g} min" if minutes else "")
+        if self.window is None:
+            self.suppress_until = None
+            self.manual = Interval(now, now + dt.timedelta(minutes=float(minutes or 60)), name)
+            return
+        until = now + dt.timedelta(minutes=float(minutes)) if minutes else self.window.end
+        self.show_override = (name, until)
+        if self.show.name != name:
+            self.window = self.window._replace(show=name)
+            self.set_show(name)
+            self.next_entry(first=True)
+
+    def cmd_on(self, minutes=None, show=None):
+        if show is not None and show not in self.shows:
+            raise ValueError(f"no show {show!r}")
         self.suppress_until = None
         if self.args.force_on or self.schedule.active():
             log.info("dashboard: on (schedule window)")
+            if show:
+                self._play_show(show, None)
             return {"note": "on for the scheduled window"}
         minutes = float(minutes or 60)
         now = self.schedule.now()
-        self.manual = (now, now + dt.timedelta(minutes=minutes))
-        log.info("dashboard: on for %g min", minutes)
+        self.manual = Interval(now, now + dt.timedelta(minutes=minutes), show or self.default_show)
+        log.info("dashboard: on for %g min (%s)", minutes, self.manual.show)
 
     def cmd_off(self):
         if self.args.force_on:
@@ -472,12 +498,12 @@ class Runner:
         self.manual = None
         win = self.schedule.active()
         if win:
-            self.suppress_until = win[1]
+            self.suppress_until = win.end
         log.info("dashboard: off until the next window")
 
     def cmd_resume(self):
         """Drop manual on/off overrides and follow the schedule again."""
-        self.manual = self.suppress_until = None
+        self.manual = self.suppress_until = self.show_override = None
         log.info("dashboard: back to the schedule")
 
     def cmd_scale(self, value):
@@ -488,24 +514,35 @@ class Runner:
         self.mixer.set_scale(v)
 
     def cmd_apply_config(self, cfg):
-        """Adopt a new schedule: section without stopping the stream."""
-        old_bri, cur = self.bri, self.entry
+        """Adopt new schedule:/shows: settings without stopping the stream."""
+        old_bri, cur, cur_show = self.bri, self.entry, (self.show.name if self.show else None)
         self._load_schedule(cfg)
-        if not self.rotation:
-            raise ValueError("rotation is empty")
-        self.mixer.set_scale(self.scale)
-        log.info("config reloaded; rotation: %s", ", ".join(map(str, self.rotation)))
-        self.order = list(self.rotation)
-        if self.shuffle:
-            random.shuffle(self.order)
-        self.pos = -1
-        if cur is not None:
-            same = [i for i, e in enumerate(self.order)
-                    if (e.kind, e.name, e.options) == (cur.kind, cur.name, cur.options)]
-            if same:
-                self.pos = same[0]       # keep playing it; the rotation continues after it
-            elif self.window is not None:
-                self.next_entry()
+        if not self.shows:
+            raise ValueError("no shows")
+        log.info("config reloaded; shows: %s", ", ".join(self.shows))
+        if self.show_override and self.show_override[0] not in self.shows:
+            self.show_override = None
+        if cur_show in self.shows:
+            # Same show: adopt its new settings, keep the current effect if it's still in it.
+            sh = self.shows[cur_show]
+            self.show, self.scale, self.fade_s = sh, sh.scale, sh.fade_s
+            self.mixer.set_scale(sh.scale)
+            self.order = list(sh.entries)
+            if sh.shuffle:
+                random.shuffle(self.order)
+            self.pos = -1
+            if cur is not None:
+                same = [i for i, e in enumerate(self.order)
+                        if (e.kind, e.name, e.options) == (cur.kind, cur.name, cur.options)]
+                if same:
+                    self.pos = same[0]
+                elif self.window is not None:
+                    self.next_entry()
+        else:
+            self.set_show(self.default_show)
+            if self.window is not None:
+                self.window = self.window._replace(show=self.show.name)
+                self.next_entry(first=True)
         if self.window is not None and self.bri != old_bri and self.bri is not None:
             self.api_call("on", "on", **self._on_state())
 
@@ -526,7 +563,7 @@ class Runner:
             return None
         if self.pos + 1 < len(self.order):
             return str(self.order[self.pos + 1])
-        return "(shuffled)" if self.shuffle else str(self.rotation[0])
+        return "(shuffled)" if self.show.shuffle else str(self.rotation[0])
 
     def update_status(self):
         now = self.schedule.now()
@@ -537,23 +574,30 @@ class Runner:
         if self.window is not None and e is not None:
             entry = {"label": str(e), "kind": e.kind, "name": e.name, "minutes": e.minutes,
                      "remaining_s": max(0, round(self.entry_end - time.monotonic())),
-                     "options": dict(p.raw_opts) if (e.kind == "show" and p and p.name == e.name) else None,
-                     "error": p.error if (e.kind == "show" and p) else None}
+                     "options": dict(p.raw_opts) if (e.kind == "effect" and p and p.name == e.name) else None,
+                     "error": p.error if (e.kind == "effect" and p) else None}
         st = {
             "now": _iso(now),
             "tz": self.schedule.loc.tz.key,
             "on": self.window is not None,
             "forced": bool(self.args.force_on),
             "preview": self.preview,
-            "window": ({"start": _iso(self.window[0]), "end": _iso(self.window[1]),
-                        "manual": self.manual is not None and self.window == self.manual}
+            "window": ({"start": _iso(self.window.start), "end": _iso(self.window.end),
+                        "show": self.window.show,
+                        "manual": self.manual is not None and self.window.start == self.manual.start}
                        if self.window else None),
-            "manual": ({"start": _iso(self.manual[0]), "end": _iso(self.manual[1])} if self.manual else None),
+            "manual": ({"start": _iso(self.manual.start), "end": _iso(self.manual.end),
+                        "show": self.manual.show} if self.manual else None),
+            "show_override": ({"show": self.show_override[0], "until": _iso(self.show_override[1])}
+                              if self.show_override else None),
             "suppressed_until": _iso(self.suppress_until),
-            "next_window": {"start": _iso(nxt[0]), "end": _iso(nxt[1])} if nxt else None,
+            "next_window": {"start": _iso(nxt.start), "end": _iso(nxt.end), "show": nxt.show} if nxt else None,
             "sun": {k: _iso(sun[k]) for k in ("dawn", "sunrise", "sunset", "dusk")},
             "entry": entry,
             "next": self.peek_next() if self.window is not None else None,
+            "show": self.show.name if (self.show and self.window is not None) else None,
+            "default_show": self.default_show,
+            "shows": list(self.shows),
             "rotation": [str(x) for x in self.rotation],
             "scale": self.scale,
             "brightness": self.bri,
@@ -575,13 +619,15 @@ def fmt(t):
 
 
 def print_schedule(cfg, days):
-    s = Schedule.from_config(cfg)
+    shows_, default = load_shows(cfg)
+    s = Schedule.from_config(cfg, default)
     today = s.now().date()
     print(f"{s.loc.info.name} ({s.loc.info.latitude}, {s.loc.info.longitude}) {s.loc.tz.key}")
     for i in range(days):
         d = today + dt.timedelta(days=i)
         sn = s.loc.sun(d)
-        wins = "  ".join(f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in s.intervals(d))
+        wins = "  ".join(f"{iv.start.strftime('%H:%M')}-{iv.end.strftime('%H:%M')} {iv.show}"
+                         for iv in s.intervals(d))
         print(f"  {d.strftime('%a %m-%d')}  sunrise {sn['sunrise'].strftime('%H:%M')}  "
               f"sunset {sn['sunset'].strftime('%H:%M')}   on: {wins}")
 

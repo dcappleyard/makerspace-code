@@ -59,7 +59,7 @@
   <div class="chip">
     <span class="muted">Source</span>
     <select id="source"><option value="ddp">DDP input</option></select>
-    <button id="restart" title="Restart the show's clock (t = 0)">Restart</button>
+    <button id="restart" title="Restart the effect's clock (t = 0)">Restart</button>
   </div>
   <div class="chip err" id="err" hidden></div>
 </div>
@@ -108,8 +108,8 @@ const sourceSel = document.getElementById("source"), errEl = document.getElement
 function showStatus(st) {
   if (view) view.setDim(!st.live);
   statusEl.className = "chip " + (st.live ? "live" : "idle");
-  if (st.source === "show") {
-    statusText.textContent = `local show '${st.show}' (reloads when its file is saved)`;
+  if (st.source === "effect") {
+    statusText.textContent = `local effect '${st.effect}' (reloads when its file is saved)`;
     statsEl.textContent = `${st.fps} fps`;
   } else {
     statusText.textContent = st.live
@@ -118,10 +118,10 @@ function showStatus(st) {
       : `idle ${st.age}s (the sculpture would be back on its WLED effect)`;
     statsEl.textContent = `${st.fps} fps · ${st.frames} frames · ${st.seq_gaps} seq gaps`;
   }
-  const want = st.source === "show" ? "show:" + st.show : "ddp";
+  const want = st.source === "effect" ? "effect:" + st.effect : "ddp";
   if (sourceSel.value !== want && document.activeElement !== sourceSel) sourceSel.value = want;
   errEl.hidden = !st.error;
-  errEl.textContent = st.error ? "show error: " + st.error : "";
+  errEl.textContent = st.error ? "effect error: " + st.error : "";
 }
 
 async function post(path, body) {
@@ -132,13 +132,13 @@ async function post(path, body) {
 }
 sourceSel.onchange = () => {
   const v = sourceSel.value;
-  post("/source", v === "ddp" ? { source: "ddp" } : { source: "show", name: v.slice(5) });
+  post("/source", v === "ddp" ? { source: "ddp" } : { source: "effect", name: v.slice(7) });
 };
 document.getElementById("restart").onclick = () => post("/restart");
-fetch("/shows").then(r => r.json()).then(j => {
-  for (const s of j.shows) {
+fetch("/effects").then(r => r.json()).then(j => {
+  for (const s of j.effects) {
     const o = document.createElement("option");
-    o.value = "show:" + s.name; o.textContent = s.name; o.title = s.description;
+    o.value = "effect:" + s.name; o.textContent = s.name; o.title = s.description;
     sourceSel.appendChild(o);
   }
   if (j.error) { errEl.hidden = false; errEl.textContent = j.error; }

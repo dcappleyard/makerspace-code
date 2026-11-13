@@ -1,7 +1,7 @@
 """Rainbow wrapped around the helix, slowly rotating upward."""
 import numpy as np
 
-from shows._util import hsv
+from effects._util import hsv
 
 DESCRIPTION = "Rainbow keyed to each lollipop's angle, climbing the helix"
 

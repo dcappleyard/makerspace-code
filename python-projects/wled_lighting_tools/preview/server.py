@@ -8,10 +8,10 @@ machine instead of the controller:
     python3 preview/server.py                     # http://localhost:8048
     python3 testpattern.py --host 127.0.0.1 parts
 
-The page can also run a show from shows/ locally (no DDP), re-importing the
-show file whenever it's saved, for a quick edit -> look loop.
+The page can also run an effect from effects/ locally (no DDP), re-importing the
+effect file whenever it's saved, for a quick edit -> look loop.
 
-The DDP side is stdlib only; local shows need numpy. The page draws with a
+The DDP side is stdlib only; local effects need numpy. The page draws with a
 plain <canvas>, so it works offline.
 """
 import argparse
@@ -48,9 +48,9 @@ class FrameBuffer:
         self.seq_gaps = 0
         self._last_seq = 0
         self._fps_window = []
-        self.source = "ddp"        # "ddp" = show what arrives on UDP; "show" = local show
-        self.show = None
-        self.show_error = None
+        self.source = "ddp"        # "ddp" = show what arrives on UDP; "effect" = local effect
+        self.effect = None
+        self.effect_error = None
 
     def _commit(self):
         """Frame complete (lock held)."""
@@ -70,7 +70,7 @@ class FrameBuffer:
         data = pkt[hdr:hdr + length]
         with self.cond:
             self.packets += 1
-            if self.source != "ddp":               # a local show has the display
+            if self.source != "ddp":               # a local effect has the display
                 return
             self.sender = addr[0]
             self.last_rx = time.monotonic()
@@ -86,9 +86,9 @@ class FrameBuffer:
     def local_frame(self, data, error):
         with self.cond:
             self.buf[:] = data
-            self.sender = f"show '{self.show}'"
+            self.sender = f"effect '{self.effect}'"
             self.last_rx = time.monotonic()
-            self.show_error = error
+            self.effect_error = error
             self._commit()
 
     def status(self):
@@ -103,21 +103,21 @@ class FrameBuffer:
                 "frames": self.frames,
                 "seq_gaps": self.seq_gaps,
                 "source": self.source,
-                "show": self.show,
-                "error": self.show_error,
+                "effect": self.effect,
+                "error": self.effect_error,
             }
 
 
-class LocalShow(threading.Thread):
-    """Renders a show from shows/ straight into the frame buffer (no DDP),
-    re-importing the show file whenever it changes."""
+class LocalEffect(threading.Thread):
+    """Renders an effect from effects/ straight into the frame buffer (no DDP),
+    re-importing the effect file whenever it changes."""
 
     def __init__(self, fb, name, fps=40):
         super().__init__(daemon=True)
-        import shows                      # numpy needed only for local shows
+        import effects                      # numpy needed only for local effects
         from layout import Layout
         self.fb, self.period = fb, 1.0 / fps
-        self.player = shows.Player(name, Layout.load(), reload=True)
+        self.player = effects.Player(name, Layout.load(), reload=True)
         self.halt = threading.Event()
 
     def run(self):
@@ -144,16 +144,16 @@ class SourceControl:
                 self.thread.join(timeout=1)
                 self.thread = None
             with self.fb.lock:
-                self.fb.source, self.fb.show, self.fb.show_error = source, name, None
+                self.fb.source, self.fb.effect, self.fb.effect_error = source, name, None
                 self.fb.last_rx = 0.0
                 self.fb._fps_window.clear()
-            if source == "show":
-                self.thread = LocalShow(self.fb, name)
+            if source == "effect":
+                self.thread = LocalEffect(self.fb, name)
                 self.thread.start()
 
     def restart(self):
         if self.thread:
-            self.thread.player.restart(reroll=True)    # new colors for shows with a random seed
+            self.thread.player.restart(reroll=True)    # new colors for effects with a random seed
 
 
 def udp_loop(fb, bind, port):
@@ -165,19 +165,19 @@ def udp_loop(fb, bind, port):
         fb.ddp_packet(pkt, addr)
 
 
-def list_shows():
+def list_effects():
     try:
-        import shows
+        import effects
     except ImportError as e:              # numpy missing: DDP mode still works
-        return {"error": f"local shows unavailable: {e}", "shows": []}
+        return {"error": f"local effects unavailable: {e}", "effects": []}
     out = []
-    for name in shows.available():
+    for name in effects.available():
         try:
-            desc = getattr(shows.load(name), "DESCRIPTION", "")
+            desc = getattr(effects.load(name), "DESCRIPTION", "")
         except Exception as e:
             desc = f"(import error: {e})"
         out.append({"name": name, "description": desc})
-    return {"shows": out}
+    return {"effects": out}
 
 
 def make_handler(fb, pixels, control):
@@ -208,22 +208,22 @@ def make_handler(fb, pixels, control):
                 self._send(pixels_json, "application/json")
             elif self.path == "/stream":
                 self.stream()
-            elif self.path == "/shows":
-                self._send(json.dumps(list_shows()).encode(), "application/json")
+            elif self.path == "/effects":
+                self._send(json.dumps(list_effects()).encode(), "application/json")
             else:
                 self.send_error(404)
 
         def do_POST(self):
-            """/source {"source": "ddp"} or {"source": "show", "name": ...};
-            /restart restarts the local show's clock."""
+            """/source {"source": "ddp"} or {"source": "effect", "name": ...};
+            /restart restarts the local effect's clock."""
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
                 if self.path == "/source":
                     src = body.get("source")
                     if src == "ddp":
                         control.set("ddp")
-                    elif src == "show" and body.get("name") in [s["name"] for s in list_shows()["shows"]]:
-                        control.set("show", body["name"])
+                    elif src == "effect" and body.get("name") in [s["name"] for s in list_effects()["effects"]]:
+                        control.set("effect", body["name"])
                     else:
                         raise ValueError(f"bad source: {body}")
                 elif self.path == "/restart":
@@ -280,14 +280,14 @@ def main():
     ap.add_argument("--ddp-port", type=int, default=4048)
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address for both listeners (0.0.0.0 lets the Pi stream to this machine)")
-    ap.add_argument("--show", help="start with this local show instead of DDP input")
+    ap.add_argument("--effect", "--show", dest="effect", help="start with this local effect instead of DDP input")
     a = ap.parse_args()
 
     pixels = pixel_map.load(a.pixels)
     fb = FrameBuffer(len(pixels))
     control = SourceControl(fb)
-    if a.show:
-        control.set("show", a.show)
+    if a.effect:
+        control.set("effect", a.effect)
     threading.Thread(target=udp_loop, args=(fb, a.bind, a.ddp_port), daemon=True).start()
     httpd = ThreadingHTTPServer((a.bind, a.http_port), make_handler(fb, pixels, control))
     httpd.daemon_threads = True

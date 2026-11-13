@@ -11,7 +11,7 @@ function of t.
 """
 import numpy as np
 
-from shows._util import hash01, hsv
+from effects._util import hash01, hsv
 
 DESCRIPTION = "White rocket up the rod, random-color burst, sparks twinkling down"
 

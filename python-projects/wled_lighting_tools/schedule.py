@@ -8,10 +8,14 @@ Time expressions (config `on:` / `off:`):
 
 A window whose off time is at or before its on time ends the next day
 (e.g. on: sunset, off: "01:00"). Windows can't be longer than 24 h.
+
+Each window names the show it plays (`show:`); windows without one play the
+default show. Intervals come back as Interval(start, end, show).
 """
 import datetime as dt
 import re
 from dataclasses import dataclass
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 from astral import LocationInfo
@@ -73,18 +77,25 @@ class Location:
         return self.sun(date)[expr.event] + expr.offset
 
 
+class Interval(NamedTuple):
+    start: dt.datetime
+    end: dt.datetime
+    show: str = None
+
+
 @dataclass(frozen=True)
 class Window:
     on: TimeExpr
     off: TimeExpr
+    show: str = None
 
     def on_date(self, loc, date):
-        """(start, end) for the window that starts on `date`."""
+        """Interval for the window that starts on `date`."""
         start = loc.resolve(self.on, date)
         end = loc.resolve(self.off, date)
         if end <= start:
             end = loc.resolve(self.off, date + dt.timedelta(days=1))
-        return start, end
+        return Interval(start, end, self.show)
 
 
 class Schedule:
@@ -92,7 +103,8 @@ class Schedule:
         self.loc, self.windows = loc, windows
 
     @classmethod
-    def from_config(cls, cfg):
+    def from_config(cls, cfg, default_show=None):
+        """Windows from config; a window without show: plays `default_show`."""
         lc = cfg.get("location", {})
         loc = Location(lc.get("latitude", 43.07), lc.get("longitude", -89.40),
                        lc.get("timezone", "America/Chicago"), lc.get("name", "Madison"))
@@ -104,7 +116,7 @@ class Schedule:
             on, off = w.get("on", w.get(True)), w.get("off", w.get(False))
             if on is None or off is None:
                 raise ValueError(f"schedule window needs on: and off: ({w})")
-            wins.append(Window(TimeExpr.parse(on), TimeExpr.parse(off)))
+            wins.append(Window(TimeExpr.parse(on), TimeExpr.parse(off), w.get("show") or default_show))
         return cls(loc, wins)
 
     def now(self):
@@ -112,23 +124,23 @@ class Schedule:
 
     def intervals(self, date):
         """All windows starting on `date`, sorted."""
-        return sorted(w.on_date(self.loc, date) for w in self.windows)
+        return sorted((w.on_date(self.loc, date) for w in self.windows), key=lambda i: (i.start, i.end))
 
     def active(self, when=None):
-        """(start, end) of the window containing `when`, else None."""
+        """Interval of the window containing `when`, else None."""
         when = when or self.now()
         d = when.astimezone(self.loc.tz).date()
         for day in (d - dt.timedelta(days=1), d):
-            for start, end in self.intervals(day):
-                if start <= when < end:
-                    return start, end
+            for iv in self.intervals(day):
+                if iv.start <= when < iv.end:
+                    return iv
         return None
 
     def next_start(self, when=None):
         when = when or self.now()
         d = when.astimezone(self.loc.tz).date()
         for i in range(0, 3):
-            for start, end in self.intervals(d + dt.timedelta(days=i)):
-                if start > when:
-                    return start, end
+            for iv in self.intervals(d + dt.timedelta(days=i)):
+                if iv.start > when:
+                    return iv
         return None

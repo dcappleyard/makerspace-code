@@ -2,7 +2,7 @@
 
 Working spec for `wled_lighting_tools/`. This is the document to revise before and during the build; `CLAUDE.md` in this folder is a short summary that points here.
 
-Status: milestones 1–4 built. **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". **Deployed on the Pi 5 in Docker (2026-11-13)**; first scheduled evening on the sculpture still to check.
+Status: milestones 1–6 built (6 not yet run on the sculpture). **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". **Deployed on the Pi 5 in Docker (2026-11-13)**; first scheduled evening on the sculpture still to check.
 
 ## Goal
 
@@ -78,28 +78,33 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
 
 ### 2. Pi show runner (this repo)
 
-- **Shows** (`shows/`): one module per show, interface
+- **Effects** (`effects/`; called `shows/` before milestone 6): one module per effect, interface
   `render(t: float, xyz: np.ndarray[N,3], meta) -> np.ndarray[N,3] uint8` (floats 0..1 also accepted)
-  where `t` is seconds since the show started, `xyz` is the pixel map, and `meta` holds the per-pixel labels from `pixels.csv` (strand, base_pair, part, slot) so shows can target stems, rings, and rods. Shows are pure functions of time and position, so they render identically on hardware and in the simulator.
-- **Show options:** a show can declare `OPTIONS = {name: default}`; it then gets `render(t, xyz, meta, opts)`, and an optional `prepare(opts)` validates and parses them once. Options come from `play.py -o key=value`, a rotation entry's `options:` mapping, or the defaults. A `seed` option left at `None` gets a random value per run (logged so a good one can be pinned; the preview's Restart re-rolls it), so "random" shows are still pure functions of `t` within a run.
-- **WLED presets in the rotation:** an entry can be `wled:<preset_id>`. The runner stops DDP streaming and sends `POST /json/state {"ps": id}`; WLED runs its own effect until the next rotation slot.
+  where `t` is seconds since the effect started, `xyz` is the pixel map, and `meta` holds the per-pixel labels from `pixels.csv` (strand, base_pair, part, slot) so effects can target stems, rings, and rods. Effects are pure functions of time and position, so they render identically on hardware and in the simulator.
+- **Effect options:** an effect can declare `OPTIONS = {name: default}`; it then gets `render(t, xyz, meta, opts)`, and an optional `prepare(opts)` validates and parses them once. Options come from `play.py -o key=value`, a show entry's `options:` mapping, or the defaults. A `seed` option left at `None` gets a random value per run (logged so a good one can be pinned; the preview's Restart re-rolls it), so "random" effects are still pure functions of `t` within a run.
+- **Shows:** a show is a named list of effects (and `wled:<id>` presets), defined in the config's `shows:` section and modelled in `shows.py` (`Entry`, `Show`, `parse_entries`, `load_shows`). Each schedule window plays one show. See "Shows, effects and a tabbed dashboard (milestone 6)".
+- **WLED presets in a show:** an entry can be `wled:<preset_id>`. The runner stops DDP streaming and sends `POST /json/state {"ps": id}`; WLED runs its own effect until the next slot.
 - **Scheduler:** uses `astral` to compute sunset/sunrise daily. YAML config, e.g.
   ```yaml
-  on: sunset - 15m
-  off: "23:00"
-  minutes_each: 10
-  rotation: [rainbow_sweep, wled:3, twinkle]
+  schedule:
+    windows: [{on: sunset - 15m, off: "23:00", show: evening}]
+    minutes_each: 10
+  shows:
+    evening: {effects: [rainbow_helix, wled:3, twinkle]}
   ```
+  (Before milestone 6 this was a single `schedule.rotation:` list; that form still loads as a show named `evening`.)
 - **On-time:** send `{"on": true, "bri": N}`, then start streaming.
   **Off-time:** stop streaming, then send `{"on": false}`.
 - **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). The config is `data/config.yaml` in a mounted `data/` dir (`WLED_CONFIG=/data/config.yaml`), so the dashboard can rewrite it; the container runs as uid 1000; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
-- **Web dashboard:** built (milestone 5), on port 8049. See "Web dashboard (milestone 5)" below and README "Dashboard".
+- **Web dashboard:** built (milestone 5), on port 8049, split into three tabs in milestone 6. See "Web dashboard (milestone 5)" and "Shows, effects and a tabbed dashboard (milestone 6)" below, and README "Dashboard".
 
 ### 3. Preview / simulator
 
-Renders shows from the pixel map so they can be developed without the hardware. See "Proposals" below for the recommended form.
+Renders effects from the pixel map so they can be developed without the hardware. See "Proposals" below for the recommended form.
 
 ## Web dashboard (milestone 5)
+
+*Milestone 6 renamed shows to effects, added named shows and split the page into tabs (next section). This section is the milestone 5 design; where it says "show" it means what are now effects, and `dashboard.js` is gone.*
 
 A web page on the Pi for watching and steering the sculpture, served at `http://<pi>:8049/`.
 
@@ -193,6 +198,133 @@ If the `ADMIN_PASSWORD` env var is set in `docker-compose.yml`, every route need
 - **On the sculpture:** with the runner's container stopped, one evening's run that uses the dashboard's controls. The live view should match the sculpture.
 - **Afterwards:** `docker stats` memory, then a reboot. The dashboard comes back with the runner.
 
+## Shows, effects and a tabbed dashboard (milestone 6)
+
+The goal: named **shows**, such as "morning" and "evening", each built from individual **effects** (dna_strand, rainbow_helix, firework…). Each schedule window plays one show. The dashboard splits into three tabs: **Scheduler**, **Preview** and **Show builder**.
+
+**Built 2026-11-13.** The design below is what was built. Differences from the plan: Play now for a show during a window lasts until the window ends unless minutes are given, and the builder's Play on sculpture now requires the show to be saved.
+
+Decided 2026-11-13:
+- **Naming:** rename the code's "shows" to "effects", so "show" only ever means a named list of effects.
+- **Per-show settings:** each show can set its own timing (minutes per effect, shuffle, crossfade) and brightness (`scale`). Shows can also include `wled:<id>` presets.
+- **Preview tab:** watches the live output, and also has an **audition** mode that plays any effect or show in the browser only, without sending it to the sculpture.
+
+### Rename: shows → effects
+
+- **Files:**
+  - `git mv shows effects`. `shows.Player` becomes `effects.Player`, plus `available()`, `load()` and `parse_option()`.
+  - Rotation entries are written `{effect: name, …}`. The old `{show: name}` key is still accepted when reading.
+  - `play.py` still plays one effect, and its help text and `--list` say "effects".
+  - The preview's Source menu says "Effect".
+- **Docs:** README, PROJECT.md and both CLAUDE.md files. The show-writing guide becomes "Writing an effect": `render(t, xyz, meta[, opts])`, `OPTIONS`, `prepare()`, `DESCRIPTION`, all unchanged.
+
+### Config shape
+
+```yaml
+schedule:
+  default_show: evening        # windows without show:, and the dashboard's "Turn on"
+  windows:
+    - {on: sunset - 15m, off: "23:00", show: evening}
+    - {on: "06:00", off: sunrise + 15m, show: morning}
+  brightness: 160              # WLED master bri (global)
+  scale: 1.0                   # global defaults, used when a show doesn't set its own
+  minutes_each: 10
+  shuffle: false
+  transition_seconds: 2
+  reassert_on: false
+
+shows:
+  evening:
+    effects:
+      - rainbow_helix
+      - {effect: dna_strand, minutes: 5, options: {motion: up}}
+      - firework
+      - wled:1
+  morning:
+    scale: 0.5                 # optional per-show: scale, minutes_each, shuffle, transition_seconds
+    effects: [twinkle, ring_spin]
+```
+
+- **Backward compatible:** a config with no `shows:` but a `schedule.rotation:` loads as one show, `evening`, set as the default. The current Pi config keeps working unchanged. The first save from the dashboard writes the new shape and drops `schedule.rotation`.
+- **Show names:** `[a-z0-9_-]`, 1–32 characters.
+
+### Runner
+
+- **Windows name their show:** `schedule.Window` gets a `show` field, and `intervals()` / `active()` return `(start, end, show)` in place of `(start, end)`. The callers to update are `runner.py`, `print_schedule` (which now lists the show per window) and `web/app.py`.
+- **Per-show state:** the runner builds one `Show` per config entry (effects as `Entry` list, plus scale, minutes, shuffle and fade, with the globals filled in). It tracks `self.show`. When a window starts, or the next window wants a different show, it switches rotation, resets the rotation position and crossfades into the new show's first effect. The scale also changes per show.
+- **Dashboard commands:**
+  - `play` takes `{show: name}` (switch to that show now; outside a window this starts a manual window) or `{effect: name, options, minutes}` (one-off, as today).
+  - `on` takes an optional `show` and defaults to `default_show`.
+  - `apply_config` reloads all shows. If the current show still exists and the current effect is still in it, that effect keeps playing.
+- **Status** gains `show` (current show name) and the show of each upcoming window.
+
+### Audition (Preview tab, browser only)
+
+- **`web/audition.py`:** an `Auditioner` that renders into its own `Mixer`, using the same `effects.Player` and crossfade, at 20 fps on a thread. It sends no DDP. It only runs while a browser is watching, and stops 10 s after the last `/api/audition/stream` client leaves.
+- **Endpoints:**
+  - `POST /api/audition` takes `{effect, options}` or `{show}`, or an unsaved show body straight from the builder, plus `seconds_each` (default 20, so a whole show can be skimmed quickly).
+  - `POST /api/audition/next` and `/api/audition/stop`.
+  - `GET /api/audition/stream` (SSE, same frame format as `/api/stream`).
+- **Cost:** rendering 200 px with numpy is cheap. The real stream's timing is unaffected, because audition runs in its own thread with its own Players.
+
+### Dashboard tabs
+
+Every tab shares a header: the title, state and WLED chips, and a compact **now playing** bar showing the current show › effect, time left and a Skip button. Tabs use `#scheduler`, `#preview` and `#builder` in the URL, so a reload stays on the same tab. Unsaved settings changes are flagged on the tab that has them.
+
+1. **Scheduler:**
+   - **Now:** the current show and effect, its options, the window, sun times, and WLED status.
+   - **Controls:**
+     - Turn on, choosing a show (defaults to the default show)
+     - Off until next window
+     - Back to schedule
+     - Play a show now / play an effect now
+     - The live brightness slider
+   - **Windows editor:** on/off times plus a show picker, with the 7-day preview listing each window's show.
+   - **Global settings:** default show, WLED brightness, the default scale/timing, and re-assert.
+   - The log.
+2. **Preview:**
+   - The 3D view, with a **Live / Audition** switch.
+   - In audition mode: pick an effect (with an options form) or a show, then Play, Next or Stop, plus a seconds-per-effect setting.
+   - View and spin buttons.
+   - A banner makes it clear that audition doesn't affect the sculpture.
+3. **Show builder:**
+   - **Show list:** new, duplicate, rename, delete. A show used by a window or set as the default can't be deleted, and the page says why.
+   - **Editor for the selected show:** its effects list (reorder, minutes, options per effect, `wled:<id>` presets), plus per-show timing and brightness overrides, with the global value shown as the placeholder.
+   - Buttons: **Audition** (switches to Preview and plays this show, including unsaved edits) and **Play on sculpture now**.
+
+**Saving:** one Save & apply button for all three tabs, writing `schedule:` and `shows:` together.
+
+**Files:** split `dashboard.js` into `common.js` (api, el, time formatting, settings state + save, tabs), `scheduler.js`, `preview.js` and `builder.js`. `index.html` gets one section per tab, and `sculpture.js` is unchanged.
+
+### Saving
+
+- **Settings API:** `GET/PUT /api/settings` becomes `{schedule: {...}, shows: {name: {...}}}`.
+- **Validation** adds these checks to today's:
+  - every window's show exists, and so does `default_show`
+  - every show has at least one effect
+  - per-show values are in range
+  - show names are valid
+- **ruamel write:** updates `schedule:` keys as today. `shows:` is a map that is created, updated or deleted per show; unchanged shows aren't touched, so their comments stay. The legacy `schedule.rotation` is removed on that first save.
+
+### Build order
+
+1. **Rename:** shows → effects, with the old key accepted when reading. Check that `play.py --list`, the preview and the runner all still work.
+2. **Config model:** shows and per-window show in `schedule.py` and `runner.py`, plus the legacy fallback. Check with `runner.py --schedule` and `--preview --force-on`, using a config with two shows and back-to-back windows.
+3. **Saving:** `config_edit` for `shows:` and the new windows.
+4. **Audition:** `web/audition.py` and its endpoints.
+5. **Front end:** tabs and the JS split.
+6. **Deploy:** docs, then redeploy. The Pi's `data/config.yaml` keeps working through the legacy fallback, and you choose when to save it in the new shape.
+
+### Verification
+
+- **Without the sculpture:**
+  - In `--preview` mode, run a two-show config with windows a few minutes apart, and confirm the runner switches shows at the boundary.
+  - Check play show / play effect / on-with-show.
+  - Audition an unsaved show, and confirm that the real stream's fps is unaffected and that audition stops when the tab closes.
+  - Save, then confirm the comment and key diff is tidy and that the legacy config migrates.
+- **Page checks:** each tab at desktop and phone widths, using the same captured-data harness as milestone 5. In a real browser if the Chrome extension is connected.
+- **On the sculpture (not yet done):** an evening with the evening show, and a morning window with its own show.
+
 ## DDP details
 
 - UDP port 4048, one packet per frame (200 × 3 = 600 bytes of data, well under one MTU).
@@ -239,7 +371,7 @@ Still to check on hardware: the runner's `wled:<id>` preset hand-off (`{"live": 
 5. **Transitions.** Hard cut between shows, or a short crossfade (easy for DDP→DDP; DDP↔preset is limited to what WLED does itself).
    *Implemented:* `transition_seconds` crossfade between DDP shows (0 = hard cut); preset hand-offs are hard cuts.
 6. **Daytime/manual override.** A way to run a show on demand outside the schedule (CLI flag now, web UI later).
-   *Implemented (CLI):* `play.py <show>` for one show, `runner.py --force-on` for the rotation. Web UI later.
+   *Implemented (CLI):* `play.py <effect>` for one effect, `runner.py --force-on` for the default show. *Web UI:* built in milestones 5–6.
 
 ## Proposals (for discussion)
 
@@ -255,17 +387,20 @@ wled_lighting_tools/
   CLAUDE.md
   README.md           setup, Pi install, WLED settings checklist
   requirements.txt    PyYAML so far; numpy, astral (+ preview deps) later
-  config.example.yaml host, brightness, schedule, rotation
+  config.example.yaml host, brightness, schedule (windows), shows
   pixel_map.py        generates pixels.csv (+ SVG check plot); load() reads it back
   pixels.csv          pixel map
   wled/               ddp.py (sender + Streamer thread), api.py (JSON API, stdlib urllib)
-  layout.py           Layout: pixels.csv as numpy arrays + derived geometry (the `meta` shows get)
-  shows/              one module per show; __init__.py has the loader + Player; _util.py helpers
-  play.py             play one show over DDP (sculpture, preview, or both)
+  layout.py           Layout: pixels.csv as numpy arrays + derived geometry (the `meta` effects get)
+  effects/            one module per effect; __init__.py has the loader + Player; _util.py helpers
+  shows.py            Entry, Show, parse_entries, load_shows (named lists of effects)
+  play.py             play one effect over DDP (sculpture, preview, or both)
   schedule.py         sun/clock time expressions and on/off windows (astral)
-  runner.py           scheduler + rotation + streaming loop
+  runner.py           scheduler + show playback + streaming loop; serves the dashboard
   testpattern.py      bench/test CLI
   preview/            server.py (DDP receiver + HTTP/SSE) + index.html (canvas 3D view)
+  web/                app.py (FastAPI), config_edit.py (ruamel round-trip), audition.py (browser-only players),
+                      static/ index.html, common.js, scheduler.js, preview.js, builder.js, sculpture.js
   Dockerfile          runner image (python:3.13-slim)
   docker-compose.yml  Pi deployment: config.yaml mount, restart unless-stopped, log rotation
 ```
@@ -276,8 +411,9 @@ wled_lighting_tools/
    *Status:* built and **verified on the sculpture (2026-11-11)** — see "Hardware bench results".
 2. **Pixel map + simulator:** approximate `pixels.csv` from the sculpture description; preview renders shows and receives DDP.
    *Status:* `pixel_map.py` and `preview/` (stdlib DDP receiver + SSE → canvas 3D view) built and checked with `testpattern.py` at ~40 fps. It can also render shows locally (no DDP) with live reload; see milestone 3.
-3. **Shows:** show interface, loader, and a first handful of shows designed for the sculpture's shape.
-   *Status:* built. `layout.Layout` (meta), `shows.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and seven shows: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`, `firework` (rocket up the rod, random-palette burst, twinkling fall), `dna_strand` (random complementary sequence in 4 user/palette/random colors, light stems and darker rings, optional rod color, static or flowing up/down at a set bpm; the first show with options, and its `PALETTES` dict is where holiday color sets go). The preview can run shows locally with live reload. Checked in the preview only, not on the sculpture.
-4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, Docker deployment.
+3. **Effects (called shows until milestone 6):** effect interface, loader, and a first handful of effects designed for the sculpture's shape.
+   *Status:* built. `layout.Layout` (meta), `effects.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and seven effects: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`, `firework` (rocket up the rod, random-palette burst, twinkling fall), `dna_strand` (random complementary sequence in 4 user/palette/random colors, light stems and darker rings, optional rod color, static or flowing up/down at a set bpm; the first effect with options, and its `PALETTES` dict is where holiday color sets go). The preview can run effects locally with live reload. Checked in the preview only, not on the sculpture.
+4. **Runner:** astral scheduler, YAML config, rotation (now shows) incl. `wled:<id>`, on/off handling, Docker deployment.
    *Status:* built (`schedule.py`, `runner.py`, `Dockerfile`, `docker-compose.yml`; replaced the earlier systemd unit 2026-11-13). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. Deployed on the Pi in Docker 2026-11-13 (see "Hardware bench results"); preset hand-off and a full evening not yet checked on the sculpture.
 5. **Web dashboard:** status + controls, live view, settings editor (FastAPI, in the runner process). *Status:* built 2026-11-13 (`web/`). Tested on the Pi in `--preview` mode: every control, the settings validation/save/live-apply (comments kept), the password, and the page at desktop and phone widths, rendered from a local copy of the page fed with captured API data. The headless browser here couldn't load it over HTTP. Not yet used against the sculpture.
+6. **Shows, effects and a tabbed dashboard:** `shows/` renamed to `effects/`; named shows (`shows.py`, `shows:` config section) with per-show overrides; per-window `show:` and `schedule.default_show`; crossfade between back-to-back windows with different shows; dashboard split into Scheduler / Preview / Show builder tabs with browser-only audition (`web/audition.py`). *Status:* built 2026-11-13. Verified on the Pi in `--preview` mode: a two-show config with back-to-back windows switched morning → evening with a crossfade; all commands; audition (effect, saved show, unsaved show, bad options rejected, idle stop); settings save (renaming a show updates its window, live apply keeps the current effect playing, a legacy config migrates, comments kept); each tab rendered at desktop and phone width from a local copy of the page fed captured API data. No real-browser click-through (the Chrome extension wasn't connected). Not yet run against the sculpture.

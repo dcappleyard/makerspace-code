@@ -22,12 +22,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
+import effects
 import pixel_map
 import shows
 from schedule import Schedule
 from testpattern import load_config
 
 from . import config_edit
+from .audition import Auditioner
 
 STATIC = Path(__file__).resolve().parent / "static"
 COMMANDS = {"skip", "play", "on", "off", "resume", "scale"}
@@ -49,12 +51,12 @@ def _parse_options(opts):
     """Option values from the page arrive as text; type them like play.py -o does."""
     out = {}
     for k, v in (opts or {}).items():
-        out[k] = shows.parse_option(f"{k}={v}")[1] if isinstance(v, str) else v
+        out[k] = effects.parse_option(f"{k}={v}")[1] if isinstance(v, str) else v
     return out
 
 
 def _windows_preview(cfg, days=7):
-    s = Schedule.from_config(cfg)
+    s = Schedule.from_config(cfg, shows.default_show_name(cfg, list(shows.raw_shows(cfg))))
     today = s.now().date()
     rows = []
     for i in range(days):
@@ -62,7 +64,7 @@ def _windows_preview(cfg, days=7):
         sun = s.loc.sun(d)
         rows.append({"date": d.isoformat(),
                      "sunrise": sun["sunrise"].isoformat(), "sunset": sun["sunset"].isoformat(),
-                     "windows": [[a.isoformat(), b.isoformat()] for a, b in s.intervals(d)]})
+                     "windows": [[iv.start.isoformat(), iv.end.isoformat(), iv.show] for iv in s.intervals(d)]})
     return rows
 
 
@@ -70,6 +72,7 @@ def create_app(runner):
     app = FastAPI(title="Sculpture dashboard", dependencies=[Depends(require_auth)],
                   docs_url=None, redoc_url=None, openapi_url=None)
     pixels = pixel_map.load()
+    audition = Auditioner(runner.layout)
 
     def cfg_path():
         if runner.cfg_path is None:
@@ -109,12 +112,12 @@ def create_app(runner):
     def get_pixels():
         return pixels
 
-    @app.get("/api/shows")
-    def get_shows():
+    @app.get("/api/effects")
+    def get_effects():
         out = []
-        for name in shows.available():
+        for name in effects.available():
             try:
-                m = shows.load(name)
+                m = effects.load(name)
                 out.append({"name": name, "description": getattr(m, "DESCRIPTION", ""),
                              "options": getattr(m, "OPTIONS", None)})
             except Exception as e:
@@ -127,6 +130,7 @@ def create_app(runner):
             raise HTTPException(404, f"no command {name}")
         if name == "play":
             body = {**body, "options": _parse_options(body.get("options"))}
+            body = {k: v for k, v in body.items() if v not in (None, "")}
         return await run_cmd(name, **body)
 
     @app.get("/api/stream")
@@ -150,6 +154,73 @@ def create_app(runner):
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    # ------------------------------------------------------------ audition
+    @app.post("/api/audition")
+    def audition_start(body: dict = Body(...)):
+        """{effect, options} | {show: saved name} | {show_body: unsaved show}, plus seconds_each."""
+        secs = body.get("seconds_each")
+        secs = float(secs) if secs not in (None, "", 0) else None
+        sc = runner.cfg.get("schedule", {})
+        g_scale, g_fade = float(sc.get("scale", 1.0)), float(sc.get("transition_seconds", 2))
+        try:
+            if body.get("effect"):
+                spec = {"effect": body["effect"], "options": _parse_options(body.get("options"))}
+                ents = shows.parse_entries([spec], 1, where="audition", strict=True)
+                audition.start(ents, body["effect"], scale=g_scale, fade_s=g_fade, seconds_each=None)
+            elif body.get("show_body") is not None:
+                sb = body["show_body"]
+                items = [config_edit._entry_out({**e, "options": _parse_options(e.get("options"))})
+                         for e in sb.get("effects") or []]
+                minutes = float(sb.get("minutes_each") or sc.get("minutes_each", 10))
+                ents = shows.parse_entries(items, minutes, where="show", strict=True)
+                audition.start(ents, body.get("label") or "unsaved show",
+                               scale=float(sb["scale"]) if sb.get("scale") not in (None, "") else g_scale,
+                               fade_s=float(sb["transition_seconds"]) if sb.get("transition_seconds") not in (None, "") else g_fade,
+                               seconds_each=secs)
+            elif body.get("show"):
+                sh = runner.shows.get(body["show"])
+                if sh is None:
+                    raise ValueError(f"no show {body['show']!r}")
+                audition.start(sh.entries, sh.name, scale=sh.scale, fade_s=sh.fade_s, seconds_each=secs)
+            else:
+                raise ValueError("say which effect or show to audition")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, **{k: v for k, v in audition.status().items() if k != "frame"}}
+
+    @app.post("/api/audition/next")
+    def audition_next():
+        audition.next()
+        return {"ok": True}
+
+    @app.post("/api/audition/stop")
+    def audition_stop():
+        audition.stop()
+        return {"ok": True}
+
+    @app.get("/api/audition/stream")
+    async def audition_stream():
+        async def gen():
+            audition.watch(+1)
+            last = None
+            try:
+                while True:
+                    st = audition.status()
+                    f = st.pop("frame")
+                    msg = {**st, "state": "live" if f else ("preset" if st["kind"] == "preset" else "idle"),
+                           "frame": base64.b64encode(f).decode() if f else None}
+                    if msg != last:
+                        yield f"data: {json.dumps(msg)}\n\n"
+                        last = msg
+                    else:
+                        yield ": keepalive\n\n"
+                    await asyncio.sleep(1 / 15)
+            finally:
+                audition.watch(-1)
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ------------------------------------------------------------ settings
     @app.get("/api/settings")
     def get_settings():
         return config_edit.read_settings(cfg_path())
@@ -157,8 +228,9 @@ def create_app(runner):
     @app.put("/api/settings")
     async def put_settings(body: dict = Body(...), dry_run: bool = False):
         path = cfg_path()
-        for e in body.get("rotation") or []:
-            e["options"] = _parse_options(e.get("options"))
+        for sh in (body.get("shows") or {}).values():
+            for e in (sh or {}).get("effects") or []:
+                e["options"] = _parse_options(e.get("options"))
         try:
             cfg = config_edit.validate(body, load_config(path), runner.layout)
         except ValueError as e:
@@ -170,7 +242,6 @@ def create_app(runner):
             config_edit.save(path, cfg)
         except ValueError as e:
             raise HTTPException(500, str(e))
-        cfg.pop("_items", None)
         log.info("dashboard: settings saved to %s", path)
         res = await run_cmd("apply_config", cfg=load_config(path))
         return {**res, "schedule": preview, "settings": config_edit.read_settings(path)}

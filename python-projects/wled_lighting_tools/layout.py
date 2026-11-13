@@ -1,6 +1,6 @@
-"""The sculpture's pixel layout as numpy arrays: what shows receive as `meta`.
+"""The sculpture's pixel layout as numpy arrays: what effects receive as `meta`.
 
-All arrays are length N (200) and aligned to the DDP pixel index, so a show
+All arrays are length N (200) and aligned to the DDP pixel index, so an effect
 returns rows in the same order.
 """
 from pathlib import Path

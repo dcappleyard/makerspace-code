@@ -16,30 +16,43 @@ schedule:
   # Times: "HH:MM", or sunrise / sunset / dawn / dusk / noon with an optional
   # offset, e.g. "sunset - 15m", "sunrise + 1h30m". An off time at or before
   # the on time means the next day (e.g. off: "01:00").
+  # Each window plays a show (below); a window without show: plays default_show.
+  default_show: evening
   windows:
     - on: sunset - 15m
       off: "23:00"
+      show: evening
     # - on: "06:00"            # optional morning window
     #   off: sunrise + 15m
+    #   show: morning
 
   brightness: 160              # WLED master brightness sent at on-time (0-255). Affects wled:<id> presets
-                               # and WLED's fallback only; it does NOT dim DDP shows on this setup.
-  scale: 1.0                   # brightness of DDP shows (0-1); the only dimmer for them
-
-  # Rotation: show names from shows/, or wled:<preset id> to hand over to a
-  # WLED preset (DDP stops while it runs). Per-entry minutes override minutes_each.
-  minutes_each: 10
-  rotation:
-    - rainbow_helix
-    - sequence
-    - ring_spin
-    - strand_flow
-    - firework
-    - {show: twinkle, minutes: 15}
-    - {show: dna_strand, options: {motion: up, bpm: 30}}   # random colors each time it comes up
-    # - show: dna_strand                             # options: see play.py --list
-    #   options: {palette: classic, rod: white, sequence: GATTACA}
-    # - wled:1
+                               # and WLED's fallback only; it does NOT dim DDP effects on this setup.
+  # Defaults for every show (a show can override scale, minutes_each, shuffle, transition_seconds):
+  scale: 1.0                   # brightness of DDP effects (0-1); the only dimmer for them
+  minutes_each: 10             # minutes per effect
   shuffle: false
-  transition_seconds: 2        # crossfade between DDP shows (0 = hard cut)
+  transition_seconds: 2        # crossfade between DDP effects (0 = hard cut)
   reassert_on: false           # every minute, turn WLED back on if something turned it off mid-window
+
+# Shows: named lists of effects (modules in effects/; see play.py --list) and
+# wled:<preset id> entries (DDP stops and WLED runs its own preset for that slot).
+# Entry forms: effect_name | wled:<id> | {effect: name, minutes: N, options: {...}}
+shows:
+  evening:
+    effects:
+      - rainbow_helix
+      - sequence
+      - ring_spin
+      - strand_flow
+      - firework
+      - {effect: twinkle, minutes: 15}
+      - {effect: dna_strand, options: {motion: up, bpm: 30}}   # random colors each time it comes up
+      # - {effect: dna_strand, options: {palette: classic, rod: white, sequence: GATTACA}}
+      # - wled:1
+  morning:
+    scale: 0.5                 # dimmer in the morning
+    minutes_each: 5
+    effects:
+      - twinkle
+      - ring_spin

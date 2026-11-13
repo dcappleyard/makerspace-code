@@ -1,4 +1,4 @@
-"""Helpers for shows. Colors are floats in 0..1 unless noted."""
+"""Helpers for effects. Colors are floats in 0..1 unless noted."""
 import numpy as np
 
 

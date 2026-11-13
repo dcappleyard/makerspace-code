@@ -1,7 +1,7 @@
 """Comets circling every ring, offset per base pair so they spiral."""
 import numpy as np
 
-from shows._util import hsv, pulse, wrap
+from effects._util import hsv, pulse, wrap
 
 DESCRIPTION = "A comet around each ring, strands spinning opposite ways"
 
