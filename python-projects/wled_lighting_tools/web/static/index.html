@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helix Sculpture</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --text: #1d1f24; --muted: #6b6f78; --line: #e2dfd8;
+    --accent: #2f6fdb; --on: #1f9d55; --warn: #c27c0e; --bad: #c8412f; --field: #fbfaf8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1014; --panel: #171a20; --text: #e7e9ee; --muted: #8b919c; --line: #2a2e37;
+      --accent: #6aa8ff; --on: #3fcf7f; --warn: #e3a440; --bad: #ff7a6b; --field: #12141a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1014; --panel: #171a20; --text: #e7e9ee; --muted: #8b919c; --line: #2a2e37;
+    --accent: #6aa8ff; --on: #3fcf7f; --warn: #e3a440; --bad: #ff7a6b; --field: #12141a;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+    padding: 14px 16px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 0 0 10px; font-weight: 600; }
+  main { max-width: 1200px; margin: 0 auto; padding: 0 16px 32px; display: grid; gap: 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; display: inline-flex;
+    gap: 6px; align-items: center; background: var(--panel); white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .ok .dot { background: var(--on); } .warn .dot { background: var(--warn); } .bad .dot { background: var(--bad); }
+  .muted { color: var(--muted); }
+  .big { font-size: 22px; font-weight: 600; overflow-wrap: anywhere; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 10px 0; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  button, input, select { font: inherit; color: var(--text); }
+  button { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  input, select { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; min-width: 0; }
+  input[type=number] { width: 80px; }
+  input[type=range] { accent-color: var(--accent); flex: 1; min-width: 120px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  label.inline { display: inline-flex; gap: 6px; align-items: center; }
+  .view { position: relative; height: 420px; border-radius: 10px; overflow: hidden; background: #07080b; }
+  .view canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  .view .overlay { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; gap: 6px;
+    flex-wrap: wrap; align-items: center; pointer-events: none; }
+  .view .overlay > * { pointer-events: auto; }
+  .view .overlay button { background: rgba(23,26,32,.85); color: #e7e9ee; border-color: #2a2e37; }
+  .view .overlay .chip { background: rgba(23,26,32,.85); color: #e7e9ee; border-color: #2a2e37; }
+  .view .overlay button.on { color: #6aa8ff; border-color: #6aa8ff; }
+  #tip { position: fixed; pointer-events: none; display: none; background: #171a20; color: #e7e9ee;
+    border: 1px solid #2a2e37; border-radius: 6px; padding: 6px 9px; white-space: nowrap; font-size: 12px; z-index: 5; }
+  #tip .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px;
+    margin-right: 4px; border: 1px solid #2a2e37; }
+  #tip .muted { color: #8b919c; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 10px; margin: 8px 0; }
+  .opts label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 2px; }
+  .opts input { width: 100%; }
+  .desc { font-size: 12px; color: var(--muted); margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  td, th { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  .rot { list-style: none; margin: 0; padding: 0; }
+  .rot li { border: 1px solid var(--line); border-radius: 10px; padding: 8px; margin: 6px 0; }
+  .rot .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .rot .num { color: var(--muted); width: 1.6em; text-align: right; }
+  .rot select { flex: 1; min-width: 140px; }
+  .win { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  .win input { flex: 1; min-width: 110px; }
+  .msg { border-radius: 8px; padding: 8px 10px; margin: 8px 0; white-space: pre-wrap; font-size: 13px; }
+  .msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  .msg.okm { background: color-mix(in srgb, var(--on) 12%, transparent); color: var(--on); }
+  .msg[hidden] { display: none; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px 14px; }
+  .grid2 label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  .grid2 label.inline { flex-direction: row; color: var(--text); font-size: 14px; align-self: end; }
+  pre.log { margin: 0; max-height: 280px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+  .sticky { position: sticky; bottom: 0; background: var(--panel); padding-top: 8px; border-top: 1px solid var(--line); }
+  .dirty { color: var(--warn); font-size: 12px; }
+  .split { display: grid; gap: 14px 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 700px) { .split { grid-template-columns: minmax(0, 1fr); } }
+  .checks { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Helix Sculpture</h1>
+  <div class="chips">
+    <span class="chip" id="stateChip"><span class="dot"></span><span id="stateText">connecting…</span></span>
+    <span class="chip" id="wledChip"><span class="dot"></span><span id="wledText">WLED</span></span>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Now</h2>
+    <div class="big" id="nowShow">—</div>
+    <div class="muted" id="nowSub"></div>
+    <div class="msg err" id="showErr" hidden></div>
+    <dl class="kv" id="nowKv"></dl>
+
+    <div class="row">
+      <button id="btnSkip">Skip to next</button>
+      <button id="btnOn">Turn on</button>
+      <input type="number" id="onMinutes" min="1" value="60" title="minutes, outside a window" aria-label="Minutes to stay on">
+      <span class="muted">min</span>
+      <button id="btnOff">Off until next window</button>
+      <button id="btnResume" hidden>Back to schedule</button>
+    </div>
+    <div class="row">
+      <span>Brightness</span>
+      <input type="range" id="scale" min="0" max="1" step="0.01" aria-label="Show brightness">
+      <span id="scaleVal" class="muted" style="width:3em">—</span>
+      <button class="small" id="btnScaleSave" title="Save this brightness to config.yaml">Save</button>
+    </div>
+
+    <h2 style="margin-top:16px">Play now</h2>
+    <div class="row">
+      <select id="playItem" aria-label="Show to play"></select>
+      <input type="number" id="playMinutes" min="0.5" step="0.5" placeholder="min" aria-label="Minutes">
+      <button class="primary" id="btnPlay">Play</button>
+    </div>
+    <div class="desc" id="playDesc"></div>
+    <div class="opts" id="playOpts"></div>
+    <div class="msg err" id="ctlErr" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>Live view</h2>
+    <div class="view" id="viewBox">
+      <canvas id="c"></canvas>
+      <div class="overlay">
+        <span class="chip" id="liveChip">idle</span>
+        <button class="small" data-view="front">Front</button>
+        <button class="small" data-view="iso">3/4</button>
+        <button class="small" data-view="top">Top</button>
+        <button class="small" id="btnSpin">Spin</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">What the runner is sending right now. Drag to rotate, scroll to zoom.</div>
+  </section>
+
+  <section class="card wide">
+    <h2>Settings <span class="dirty" id="dirty" hidden>· unsaved changes</span></h2>
+    <div class="split">
+      <div>
+        <h2 style="margin-top:4px">On windows</h2>
+        <div class="desc">"HH:MM", or sunrise / sunset / dawn / dusk / noon with an offset, e.g. "sunset - 15m". An off time at or before the on time means the next day.</div>
+        <div id="windows"></div>
+        <button class="small" id="addWin">+ window</button>
+      </div>
+      <div>
+        <h2 style="margin-top:4px">Next 7 days</h2>
+        <table><thead><tr><th>Day</th><th>Sunset</th><th>On</th></tr></thead><tbody id="sched"></tbody></table>
+      </div>
+    </div>
+
+    <h2 style="margin-top:16px">General</h2>
+    <div class="grid2" id="scalars">
+      <label>Show brightness (scale 0–1)<input type="number" step="0.05" min="0" max="1" data-k="scale"></label>
+      <label>WLED brightness (0–255)<input type="number" step="1" min="0" max="255" data-k="brightness"></label>
+      <label>Minutes per show<input type="number" step="0.5" min="0.5" data-k="minutes_each"></label>
+      <label>Crossfade seconds<input type="number" step="0.5" min="0" data-k="transition_seconds"></label>
+    </div>
+    <div class="checks" id="checks">
+      <label class="inline"><input type="checkbox" data-k="shuffle"> Shuffle</label>
+      <label class="inline" title="Every minute, turn WLED back on if something turned it off mid-window"><input type="checkbox" data-k="reassert_on"> Re-assert on</label>
+    </div>
+
+    <h2 style="margin-top:16px">Rotation</h2>
+    <ul class="rot" id="rot"></ul>
+    <button class="small" id="addRot">+ entry</button>
+
+    <div class="sticky">
+      <div class="msg err" id="setErr" hidden></div>
+      <div class="msg okm" id="setOk" hidden></div>
+      <div class="row">
+        <button class="primary" id="btnSave">Save &amp; apply</button>
+        <button id="btnRevert">Revert</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card wide">
+    <h2>Log</h2>
+    <pre class="log" id="log"></pre>
+  </section>
+</main>
+<div id="tip"></div>
+
+<script src="/sculpture.js"></script>
+<script src="/static/dashboard.js"></script>
+</body>
+</html>

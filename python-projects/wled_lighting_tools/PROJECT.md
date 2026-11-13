@@ -92,12 +92,106 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
   ```
 - **On-time:** send `{"on": true, "bri": N}`, then start streaming.
   **Off-time:** stop streaming, then send `{"on": false}`.
-- **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). `config.yaml` is bind-mounted read-only; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
-- **Later (optional):** small FastAPI web UI to pick a show and edit the schedule.
+- **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). The config is `data/config.yaml` in a mounted `data/` dir (`WLED_CONFIG=/data/config.yaml`), so the dashboard can rewrite it; the container runs as uid 1000; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
+- **Web dashboard:** built (milestone 5), on port 8049. See "Web dashboard (milestone 5)" below and README "Dashboard".
 
 ### 3. Preview / simulator
 
 Renders shows from the pixel map so they can be developed without the hardware. See "Proposals" below for the recommended form.
+
+## Web dashboard (milestone 5)
+
+A web page on the Pi for watching and steering the sculpture, served at `http://<pi>:8049/`.
+
+Decided 2026-11-13:
+- **Scope:** all three pieces: status + controls, a live view, and a settings editor.
+- **Server:** FastAPI + uvicorn.
+- **Saving:** edits are written back to `config.yaml` with ruamel.yaml, which keeps the comments.
+- **Password:** optional, via `ADMIN_PASSWORD`.
+
+### Shape
+
+The dashboard runs **inside the runner process**, so it sees and steers what is actually playing. It doesn't simulate it.
+
+- `runner.py` starts uvicorn in a daemon thread (`--web-port`, default 8049; 0 turns the dashboard off). The control loop stays on the main thread, so SIGTERM handling is unchanged.
+- **The web side never touches runner state directly.** Its requests go on a `queue.Queue` of commands, which the control loop drains every `TICK` (0.25 s). Reads go to a status snapshot that the loop rebuilds each tick under a lock. The runner's state stays single-threaded, as it is now.
+- **Live view:** `Mixer.__call__` keeps the last frame it returned. An SSE endpoint sends it at about 15 fps (base64 RGB, 600 bytes). Outside a window, or while a `wled:<id>` preset runs, it sends "idle"/"preset" instead.
+
+### Pages and API
+
+One page, `web/static/index.html` + `dashboard.js`, in plain JS like `preview/`, with no CDN.
+
+1. **Status:**
+   - **Window:** whether it's on, plus today's sunset/sunrise and the next window.
+   - **Now playing:** the current entry and its options, time left, and what's next.
+   - **Brightness:** the current scale.
+   - **WLED:** reachable or not (the last API result, plus a `/json/info` check every 60 s), and its `bri`.
+   - **Log:** the last ~100 lines, from a ring-buffer logging handler.
+2. **Controls** (all go through the command queue):
+   - **Skip:** next entry.
+   - **Play now:** a show (with options) or `wled:<id>`, for N minutes. The rotation then resumes.
+   - **On now:** until the current window's end, or for N minutes outside a window.
+   - **Off until next window.**
+   - **Live scale slider:** applies straight to the current `Player.scale`. A separate "save" button stores it.
+
+   These overrides live in memory and a restart clears them, which is fine for one-offs.
+3. **Live view:** the canvas 3D renderer from `preview/index.html`, moved into a shared `web/static/sculpture.js`. The preview page loads that same file (`preview/server.py` also serves it), so there's one renderer.
+4. **Settings:** edits only the `schedule:` section:
+   - windows (`on`/`off` expressions, previewed with the next 7 days computed by `schedule.py`)
+   - `brightness`, `scale`, `minutes_each`, `shuffle`, `transition_seconds`, `reassert_on`
+   - the rotation: reorder, add or remove entries, minutes per entry, and per-show options. The option fields are seeded from each show's `OPTIONS` defaults, with `DESCRIPTION` alongside, and values are parsed with `shows.parse_option`.
+
+   The `wled:` and `location:` sections stay hand-edited, because changing them means a restart.
+
+API sketch: `GET /api/status`, `GET /api/stream` (SSE), `GET /api/shows` (name, description, `OPTIONS`), `GET /api/pixels`, `POST /api/cmd/{skip|play|on|off|scale}`, `GET/PUT /api/settings`, `GET /api/schedule?days=7`.
+
+### Saving settings safely
+
+- **Validate first:** `PUT /api/settings` parses windows with `Schedule.from_config`, rotation entries with `parse_rotation`, and show options by building a `shows.Player` for each entry, so `prepare()` gets to reject bad values. Any error goes back to the page, and nothing is written.
+- **Write:** a ruamel.yaml round-trip changes only the edited keys under `schedule:`, keeping comments and order. It writes a temp file, then `os.replace` swaps it in. The previous file is kept as `config.yaml.bak`.
+- **Apply live:** the write is followed by an `apply_config` command. The loop rebuilds the schedule and rotation and updates the scale/fade, without restarting the stream. If the current entry is still in the rotation it keeps playing; otherwise the runner moves on. If brightness changed during a window, the new `bri` is sent.
+- **Docker:** `os.replace` can't swap a bind-mounted *file*, so the config moves into a mounted directory:
+  - Compose mounts `./data:/data`, and the Dockerfile CMD becomes `runner.py --config /data/config.yaml`. `data/` is git-ignored.
+  - One-time migration on the Pi: `mkdir data && mv config.yaml data/`.
+  - Running locally (venv) still defaults to `./config.yaml`.
+
+### Password
+
+If the `ADMIN_PASSWORD` env var is set in `docker-compose.yml`, every route needs HTTP Basic auth (any user name). Empty means open, the same scheme as `eink_photo_server`.
+
+### Files
+
+- **New:**
+  - `web/app.py`: the FastAPI app, built around the `Runner`.
+  - `web/config_edit.py`: the ruamel round-trip, validation and atomic write.
+  - `web/static/{index.html, dashboard.js, sculpture.js}`.
+- **Changed:**
+  - `runner.py`: command queue, status snapshot, `apply_config`, log ring buffer, last-frame capture in `Mixer`, web thread.
+  - `preview/index.html` and `preview/server.py`: use the shared `sculpture.js`.
+  - `requirements.txt`: add `fastapi`, `uvicorn` and `ruamel.yaml`, unpinned.
+  - `Dockerfile` and `docker-compose.yml`: `ports: "8049:8049"`, `./data:/data`, `ADMIN_PASSWORD`.
+  - `.gitignore`: add `data/`.
+  - README, CLAUDE.md files.
+
+**Memory:** FastAPI + uvicorn add roughly 30–40 MB on a 1 GB Pi that's already about 620 MB in use with the desktop. Check `docker stats` after deploying.
+
+### Build order
+
+1. **Runner internals:** command queue, status snapshot, `apply_config`, log buffer, last frame. Check by driving the queue from a REPL with `--preview --force-on`.
+2. **FastAPI status + controls**, with the password.
+3. **Shared `sculpture.js`:** the live view in the dashboard, and the preview switched over to it. Check that the preview still works.
+4. **Settings editor:** ruamel write, validation, live apply, and the `data/` migration.
+5. **Docker + docs.**
+
+### Verification
+
+- **Without the sculpture:** in the container, run `docker compose run --rm -p 8049:8049 wled-show-runner python runner.py --preview --force-on --config /data/config.yaml`. That sends DDP to the container's own localhost and makes no WLED calls, but the live view still shows the frames.
+  - Check that skip / play now / on / off / scale act within a tick and show up in the log pane.
+  - Make an invalid edit (a bad window expression, an unknown show option) and confirm it's rejected with a message and that `config.yaml` is unchanged.
+  - Make a valid edit and confirm the rotation changes without the stream dropping, that `diff data/config.yaml.bak data/config.yaml` shows only the edited keys, and that the comments survived.
+- **Password:** with `ADMIN_PASSWORD` set, `curl` without credentials gets 401.
+- **On the sculpture:** with the runner's container stopped, one evening's run that uses the dashboard's controls. The live view should match the sculpture.
+- **Afterwards:** `docker stats` memory, then a reboot. The dashboard comes back with the runner.
 
 ## DDP details
 
@@ -186,4 +280,4 @@ wled_lighting_tools/
    *Status:* built. `layout.Layout` (meta), `shows.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and seven shows: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`, `firework` (rocket up the rod, random-palette burst, twinkling fall), `dna_strand` (random complementary sequence in 4 user/palette/random colors, light stems and darker rings, optional rod color, static or flowing up/down at a set bpm; the first show with options, and its `PALETTES` dict is where holiday color sets go). The preview can run shows locally with live reload. Checked in the preview only, not on the sculpture.
 4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, Docker deployment.
    *Status:* built (`schedule.py`, `runner.py`, `Dockerfile`, `docker-compose.yml`; replaced the earlier systemd unit 2026-11-13). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. Deployed on the Pi in Docker 2026-11-13 (see "Hardware bench results"); preset hand-off and a full evening not yet checked on the sculpture.
-5. **Optional:** FastAPI web UI for picking a show and editing the schedule.
+5. **Web dashboard:** status + controls, live view, settings editor (FastAPI, in the runner process). *Status:* built 2026-11-13 (`web/`). Tested on the Pi in `--preview` mode: every control, the settings validation/save/live-apply (comments kept), the password, and the page at desktop and phone widths, rendered from a local copy of the page fed with captured API data. The headless browser here couldn't load it over HTTP. Not yet used against the sculpture.

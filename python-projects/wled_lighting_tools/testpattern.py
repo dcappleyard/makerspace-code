@@ -19,6 +19,7 @@ Host comes from config.yaml (copy config.example.yaml) or --host.
 """
 import argparse
 import colorsys
+import os
 import sys
 import time
 from pathlib import Path
@@ -82,7 +83,8 @@ def main():
     ap.add_argument("pattern", choices=["info", "power", "rgb", "solid", "outputs", "parts",
                                         "basepairs", "chase", "step", "ramp", "blank"])
     ap.add_argument("args", nargs="*", help="pattern arguments (power: on|off; solid: R G B)")
-    ap.add_argument("--config", default=str(HERE / "config.yaml"))
+    ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
+                    help="config file (default: $WLED_CONFIG, else config.yaml here)")
     ap.add_argument("--host", help="WLED host or IP (overrides config)")
     ap.add_argument("--pixels", default=str(HERE / "pixels.csv"))
     ap.add_argument("--fps", type=float, help="stream rate (default from config, else 40)")

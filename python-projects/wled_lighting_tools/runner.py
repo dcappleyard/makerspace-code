@@ -14,11 +14,15 @@ WLED falls back to its own effect after its realtime timeout (by design).
 import argparse
 import datetime as dt
 import logging
+import os
+import queue
 import random
 import signal
 import sys
 import threading
 import time
+from collections import deque
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,12 +87,21 @@ class Mixer:
         self.cur = self.prev = None
         self.fade_start, self.fade_s = 0.0, 0.0
         self._logged_error = None
+        self.last = None             # last frame sent (bytes), for the dashboard's live view
 
     def switch(self, player, fade_s=0.0):
         with self.lock:
             self.prev = self.cur if (player is not None and fade_s > 0) else None
             self.cur = player
             self.fade_start, self.fade_s = time.monotonic(), fade_s
+            if player is None:
+                self.last = None
+
+    def set_scale(self, scale):
+        with self.lock:
+            for p in (self.cur, self.prev):
+                if p is not None:
+                    p.scale = scale
 
     def __call__(self):
         with self.lock:
@@ -105,6 +118,7 @@ class Mixer:
                     x = np.frombuffer(f, np.uint8).astype(np.float32)
                     y = np.frombuffer(prev.frame(), np.uint8).astype(np.float32)
                     f = (y + (x - y) * a + 0.5).astype(np.uint8).tobytes()
+            self.last = f
             return f
 
     def _log_error(self, player):
@@ -135,20 +149,32 @@ class Fanout:
             s.close()
 
 
+class LogBuffer(logging.Handler):
+    """Keeps the last N formatted log lines for the dashboard."""
+
+    def __init__(self, n=200):
+        super().__init__()
+        self.lines = deque(maxlen=n)
+
+    def emit(self, record):
+        try:
+            self.lines.append(self.format(record))
+        except Exception:
+            pass
+
+
+def _iso(t):
+    return t.isoformat() if t else None
+
+
 class Runner:
-    def __init__(self, cfg, args):
-        self.cfg, self.args = cfg, args
+    def __init__(self, cfg, args, cfg_path=None):
+        self.args = args
+        self.cfg_path = cfg_path
         wc = cfg.get("wled", {})
-        sc = cfg.get("schedule", {})
-        self.schedule = Schedule.from_config(cfg)
-        self.rotation = parse_rotation(sc)
+        self._load_schedule(cfg)
         if not self.rotation:
             sys.exit("rotation is empty (check schedule.rotation in config.yaml)")
-        self.shuffle = bool(sc.get("shuffle", False))
-        self.fade_s = float(sc.get("transition_seconds", 2))
-        self.bri = sc.get("brightness")
-        self.scale = max(0.0, min(1.0, float(sc.get("scale", 1.0))))
-        self.reassert = bool(sc.get("reassert_on", False))
         self.fps = float(wc.get("fps", 40))
         self.port = int(wc.get("ddp_port", 4048))
 
@@ -173,6 +199,29 @@ class Runner:
         self.pending_start = 0.0     # retry time after a failed window start
         self.next_reassert = 0.0
         self.stopping = threading.Event()
+
+        # Dashboard (web/app.py) plumbing. The web side only submits commands
+        # and reads the status snapshot; runner state stays on the loop thread.
+        self.cmds = queue.Queue()
+        self._done = []              # (future, result, exception) to resolve after this tick
+        self.manual = None           # (start, end): "on now" outside the schedule
+        self.suppress_until = None   # "off until next window": skip windows ending by then
+        self._status = {}
+        self._status_lock = threading.Lock()
+        self.wled_health = {"reachable": None, "error": None, "checked": None, "info": None}
+        self.logbuf = None
+
+    def _load_schedule(self, cfg):
+        """Everything that comes from the schedule: section (and location:)."""
+        sc = cfg.get("schedule", {})
+        self.cfg = cfg
+        self.schedule = Schedule.from_config(cfg)
+        self.rotation = parse_rotation(sc)
+        self.shuffle = bool(sc.get("shuffle", False))
+        self.fade_s = float(sc.get("transition_seconds", 2))
+        self.bri = sc.get("brightness")
+        self.scale = max(0.0, min(1.0, float(sc.get("scale", 1.0))))
+        self.reassert = bool(sc.get("reassert_on", False))
 
     # ------------------------------------------------------------ WLED API
     def api_call(self, action, desc, **state):
@@ -301,15 +350,17 @@ class Runner:
             nxt = self.schedule.active() or self.schedule.next_start()
             if nxt:
                 log.info("current/next window: %s -> %s", fmt(nxt[0]), fmt(nxt[1]))
+        if self.api is not None:
+            threading.Thread(target=self._health_loop, name="wled-health", daemon=True).start()
         while not self.stopping.is_set():
-            if self.args.force_on:
-                win = (self.schedule.now(), None)
-            else:
-                win = self.schedule.active()
+            self.drain_commands()
+            win = self.effective_window()
             if win and self.window is None and time.monotonic() >= self.pending_start:
                 self.start_window(win)
             elif not win and self.window is not None:
                 self.end_window()
+            elif win and win[1] != self.window[1]:
+                self.window = win            # e.g. a manual "on" running into a scheduled window
             if self.window is not None:
                 if self.streamer and self.streamer.error:
                     log.error("streamer died: %s; restarting it", self.streamer.error)
@@ -319,11 +370,204 @@ class Runner:
                     self.next_entry()
                 self.maybe_reassert()
             self.retry_pending()
+            self.update_status()
+            self.resolve_commands()
             self.stopping.wait(TICK)
         # Shutdown mid-window: just stop streaming; WLED falls back to its own effect.
         self.mixer.switch(None)
         self.stop_streaming()
         log.info("stopped")
+
+    def effective_window(self):
+        """The window that should be on now: the schedule, adjusted by the
+        dashboard's manual on/off overrides (which live in memory only)."""
+        now = self.schedule.now()
+        if self.args.force_on:
+            return (now, None)
+        win = self.schedule.active(now)
+        if self.suppress_until is not None:
+            if now >= self.suppress_until:
+                self.suppress_until = None
+            elif win and win[1] <= self.suppress_until:
+                win = None
+        if self.manual is not None:
+            if now >= self.manual[1]:
+                self.manual = None
+            elif not win:
+                win = self.manual
+        return win
+
+    # ------------------------------------------------------------ dashboard
+    def submit(self, name, **kw):
+        """Queue a command for the loop thread (called from the web thread).
+        Returns a Future that resolves to a result dict or raises ValueError."""
+        fut = Future()
+        self.cmds.put((name, kw, fut))
+        return fut
+
+    def drain_commands(self):
+        """Run queued commands. Their futures resolve at the end of the tick
+        (resolve_commands), so a reply's status already reflects the command."""
+        while True:
+            try:
+                name, kw, fut = self.cmds.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._done.append((fut, getattr(self, f"cmd_{name}")(**kw) or {}, None))
+            except Exception as e:
+                if not isinstance(e, ValueError):
+                    log.exception("dashboard command %s failed", name)
+                self._done.append((fut, None, e))
+
+    def resolve_commands(self):
+        done, self._done = self._done, []
+        for fut, res, exc in done:
+            fut.set_exception(exc) if exc else fut.set_result(res)
+
+    def cmd_skip(self):
+        if self.window is None:
+            raise ValueError("the sculpture is off")
+        log.info("dashboard: skip")
+        self.next_entry()
+
+    def cmd_play(self, item, minutes=None, options=None):
+        """Play one show (or wled:<id>) now for `minutes`, then resume the rotation."""
+        minutes = float(minutes or self.cfg.get("schedule", {}).get("minutes_each", 10))
+        spec = {"show": item, "minutes": minutes, **({"options": options} if options else {})}
+        if str(item).startswith("wled:"):
+            spec = {"wled": str(item)[5:], "minutes": minutes}
+        entries = parse_rotation({"rotation": [spec]})
+        if not entries:
+            raise ValueError(f"unknown show or bad preset: {item}")
+        e = entries[0]
+        if e.kind == "show":       # surface bad options as an error, not a log line
+            shows.Player(e.name, self.layout, options=e.options)
+        log.info("dashboard: play %s for %g min", e, minutes)
+        if self.window is None:
+            self.suppress_until = None
+            now = self.schedule.now()
+            self.manual = (now, now + dt.timedelta(minutes=minutes))
+            self.start_window(self.manual)
+            if self.window is None:
+                raise ValueError("couldn't start streaming (see log)")
+        if not self.play(e, self.entry):
+            raise ValueError(f"{e} failed to start (see log)")
+        self.entry = e
+        self.entry_end = time.monotonic() + 60 * minutes
+
+    def cmd_on(self, minutes=None):
+        self.suppress_until = None
+        if self.args.force_on or self.schedule.active():
+            log.info("dashboard: on (schedule window)")
+            return {"note": "on for the scheduled window"}
+        minutes = float(minutes or 60)
+        now = self.schedule.now()
+        self.manual = (now, now + dt.timedelta(minutes=minutes))
+        log.info("dashboard: on for %g min", minutes)
+
+    def cmd_off(self):
+        if self.args.force_on:
+            raise ValueError("runner was started with --force-on; stop it instead")
+        self.manual = None
+        win = self.schedule.active()
+        if win:
+            self.suppress_until = win[1]
+        log.info("dashboard: off until the next window")
+
+    def cmd_resume(self):
+        """Drop manual on/off overrides and follow the schedule again."""
+        self.manual = self.suppress_until = None
+        log.info("dashboard: back to the schedule")
+
+    def cmd_scale(self, value):
+        v = float(value)
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("scale must be 0..1")
+        self.scale = v
+        self.mixer.set_scale(v)
+
+    def cmd_apply_config(self, cfg):
+        """Adopt a new schedule: section without stopping the stream."""
+        old_bri, cur = self.bri, self.entry
+        self._load_schedule(cfg)
+        if not self.rotation:
+            raise ValueError("rotation is empty")
+        self.mixer.set_scale(self.scale)
+        log.info("config reloaded; rotation: %s", ", ".join(map(str, self.rotation)))
+        self.order = list(self.rotation)
+        if self.shuffle:
+            random.shuffle(self.order)
+        self.pos = -1
+        if cur is not None:
+            same = [i for i, e in enumerate(self.order)
+                    if (e.kind, e.name, e.options) == (cur.kind, cur.name, cur.options)]
+            if same:
+                self.pos = same[0]       # keep playing it; the rotation continues after it
+            elif self.window is not None:
+                self.next_entry()
+        if self.window is not None and self.bri != old_bri and self.bri is not None:
+            self.api_call("on", "on", **self._on_state())
+
+    def _health_loop(self):
+        while not self.stopping.is_set():
+            h = {"checked": _iso(self.schedule.now())}
+            try:
+                i = self.api.info()
+                h.update(reachable=True, error=None,
+                         info={k: i.get(k) for k in ("name", "ver", "ip")} | {"leds": i.get("leds", {}).get("count")})
+            except Exception as e:
+                h.update(reachable=False, error=str(e), info=self.wled_health.get("info"))
+            self.wled_health = h
+            self.stopping.wait(60)
+
+    def peek_next(self):
+        if not self.rotation:
+            return None
+        if self.pos + 1 < len(self.order):
+            return str(self.order[self.pos + 1])
+        return "(shuffled)" if self.shuffle else str(self.rotation[0])
+
+    def update_status(self):
+        now = self.schedule.now()
+        sun = self.schedule.loc.sun(now.date())
+        nxt = self.schedule.next_start(now)
+        e, p = self.entry, self.mixer.cur
+        entry = None
+        if self.window is not None and e is not None:
+            entry = {"label": str(e), "kind": e.kind, "name": e.name, "minutes": e.minutes,
+                     "remaining_s": max(0, round(self.entry_end - time.monotonic())),
+                     "options": dict(p.raw_opts) if (e.kind == "show" and p and p.name == e.name) else None,
+                     "error": p.error if (e.kind == "show" and p) else None}
+        st = {
+            "now": _iso(now),
+            "tz": self.schedule.loc.tz.key,
+            "on": self.window is not None,
+            "forced": bool(self.args.force_on),
+            "preview": self.preview,
+            "window": ({"start": _iso(self.window[0]), "end": _iso(self.window[1]),
+                        "manual": self.manual is not None and self.window == self.manual}
+                       if self.window else None),
+            "manual": ({"start": _iso(self.manual[0]), "end": _iso(self.manual[1])} if self.manual else None),
+            "suppressed_until": _iso(self.suppress_until),
+            "next_window": {"start": _iso(nxt[0]), "end": _iso(nxt[1])} if nxt else None,
+            "sun": {k: _iso(sun[k]) for k in ("dawn", "sunrise", "sunset", "dusk")},
+            "entry": entry,
+            "next": self.peek_next() if self.window is not None else None,
+            "rotation": [str(x) for x in self.rotation],
+            "scale": self.scale,
+            "brightness": self.bri,
+            "targets": self.targets,
+            "wled": self.wled_health,
+            "pending": [d for _, d, _ in self.pending.values()],
+            "streaming": self.streamer is not None and self.mixer.cur is not None,
+        }
+        with self._status_lock:
+            self._status = st
+
+    def status(self):
+        with self._status_lock:
+            return dict(self._status)
 
 
 def fmt(t):
@@ -344,13 +588,16 @@ def print_schedule(cfg, days):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(HERE / "config.yaml"))
+    ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
+                    help="config file (default: $WLED_CONFIG, else config.yaml here)")
     ap.add_argument("--host", help="WLED host (overrides config)")
     ap.add_argument("--preview", action="store_true", help="DDP to 127.0.0.1 and skip WLED API calls")
     ap.add_argument("--also", action="append", default=[], help="additional DDP target (repeatable)")
     ap.add_argument("--force-on", action="store_true", help="ignore the schedule; run the rotation now")
     ap.add_argument("--schedule", action="store_true", help="print upcoming windows and exit")
     ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--web-port", type=int, default=8049, help="dashboard port (0 = no dashboard)")
+    ap.add_argument("--web-bind", default="0.0.0.0", help="dashboard bind address")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
 
@@ -363,7 +610,13 @@ def main():
     if a.schedule:
         return print_schedule(cfg, a.days)
 
-    r = Runner(cfg, a)
+    r = Runner(cfg, a, cfg_path)
+    r.logbuf = LogBuffer()
+    r.logbuf.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(r.logbuf)
+    if a.web_port:
+        from web.app import start_web     # imported here so the CLI works without fastapi
+        start_web(r, a.web_bind, a.web_port)
     signal.signal(signal.SIGTERM, lambda *_: r.stopping.set())
     try:
         r.run()

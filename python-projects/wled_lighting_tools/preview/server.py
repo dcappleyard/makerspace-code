@@ -201,6 +201,9 @@ def make_handler(fb, pixels, control):
             if self.path in ("/", "/index.html"):
                 # read per request so page edits show on reload
                 self._send((HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+            elif self.path == "/sculpture.js":
+                self._send((HERE.parent / "web" / "static" / "sculpture.js").read_bytes(),
+                           "application/javascript; charset=utf-8")
             elif self.path == "/pixels.json":
                 self._send(pixels_json, "application/json")
             elif self.path == "/stream":

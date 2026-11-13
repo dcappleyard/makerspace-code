@@ -11,6 +11,7 @@
 Streams until Ctrl-C (or --duration); WLED reverts to its own effect ~2.5 s later.
 """
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,7 +28,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("show", nargs="?", help="show name (a module in shows/)")
     ap.add_argument("--list", action="store_true", help="list shows and exit")
-    ap.add_argument("--config", default=str(HERE / "config.yaml"))
+    ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
+                    help="config file (default: $WLED_CONFIG, else config.yaml here)")
     ap.add_argument("--host", help="DDP target (default: wled.host from config)")
     ap.add_argument("--preview", action="store_true", help="send to 127.0.0.1 instead of the sculpture")
     ap.add_argument("--also", action="append", default=[], help="additional DDP target (repeatable)")

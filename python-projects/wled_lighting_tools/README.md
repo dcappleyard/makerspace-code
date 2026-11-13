@@ -74,9 +74,35 @@ python3 runner.py                          # normal scheduled operation (what th
 - **Stopping mid-window** (Ctrl-C, SIGTERM, crash) only stops streaming. WLED falls back to its own effect ~2.5 s later, which is the intended fallback.
 - **YAML note:** PyYAML reads a bare `on:` key as boolean `true`. The schedule parser accepts that, so `on:` / `off:` work as written.
 
+### Dashboard
+
+The runner serves a web dashboard at `http://<pi>:8049/` (`--web-port`, 0 turns it off). It runs inside the runner process, so it shows and controls what is actually playing.
+
+- **Now:** the current show and its options, time left, what's next, the window, today's sunrise and sunset, and whether WLED is reachable.
+- **Controls:**
+  - skip to the next show
+  - play a show (with options) or a WLED preset now, for N minutes, then return to the rotation
+  - turn on now (for N minutes outside a window)
+  - off until the next window
+  - back to the schedule
+  - a live brightness slider (applies `scale` immediately; **Save** writes it to the config)
+
+  These overrides live in memory, so a restart drops them.
+- **Live view:** the frames the runner is sending, on the same 3D model as the preview (`web/static/sculpture.js` is shared by both pages). It shows nothing while a `wled:<id>` preset runs, since WLED draws that itself.
+- **Settings:** the `schedule:` section of the config:
+  - on/off windows, with a 7-day preview
+  - brightness, scale, minutes per show, crossfade, shuffle and re-assert
+  - the rotation (order, minutes, per-show options)
+
+  Changes are checked before saving: window expressions are parsed, and show options go through the show's own `prepare()`. They're then written back with ruamel.yaml, so comments and order survive, and applied without restarting the stream. The previous file is kept as `config.yaml.bak`. `wled:` and `location:` stay hand-edited and need a restart.
+- **Log:** the runner's last ~150 log lines.
+- **Password:** set `ADMIN_PASSWORD` in `docker-compose.yml` to require HTTP Basic auth (any user name). Empty means open to the LAN.
+
+To try the dashboard without the sculpture, run `python3 runner.py --preview --force-on` and open `http://localhost:8049/`.
+
 ### Install on the Pi (Docker)
 
-The runner runs permanently in Docker (`docker-compose.yml`, `restart: unless-stopped`), so it comes back after reboots and crashes. The preview isn't part of it; run that from a venv as above.
+The runner and its dashboard run permanently in Docker (`docker-compose.yml`, `restart: unless-stopped`), so they come back after reboots and crashes. The dashboard is on port 8049. The preview isn't part of it; run that from a venv as above.
 
 **One-time setup:**
 
@@ -91,13 +117,14 @@ The runner runs permanently in Docker (`docker-compose.yml`, `restart: unless-st
 
 ```bash
 cd ~/dev/makerspace-code/python-projects/wled_lighting_tools
-cp config.example.yaml config.yaml && nano config.yaml     # before the first `up`, or Docker makes a config.yaml/ directory
+mkdir -p data && cp config.example.yaml data/config.yaml && nano data/config.yaml
 docker compose run --rm wled-show-runner python runner.py --schedule   # sanity-check location/timezone
 docker compose up -d --build
 docker compose logs -f
 ```
 
-- **Updating:** `git pull && docker compose up -d --build`. The image is a snapshot, so edits in the checkout don't reach the running service until you rebuild. To apply a `config.yaml` change, run `docker compose restart`.
+- **Config:** in Docker, the config is `data/config.yaml` (git-ignored), mounted at `/data`. The image sets `WLED_CONFIG=/data/config.yaml`, so every tool run inside the container uses it. The container runs as uid 1000 (the Pi's login user), so files the dashboard writes stay editable. If you deployed before the dashboard existed, move the old config once: `mkdir -p data && mv config.yaml data/`.
+- **Updating:** `git pull && docker compose up -d --build`. The image is a snapshot, so edits in the checkout don't reach the running service until you rebuild. To apply a hand edit to `data/config.yaml`, run `docker compose restart`, or just use the dashboard.
 - **Only one sender at a time.** Before you run `play.py`, `testpattern.py` or `runner.py --force-on` against the sculpture, run `docker compose stop`. Afterwards, run `docker compose start`. Two DDP streams at once make the sculpture flicker. To run a one-off inside the image, use `docker compose run --rm wled-show-runner python runner.py --force-on`.
 - **Logs:** `docker compose logs`. They're capped at about 3 MB (json-file rotation) to spare the SD card.
 - **Clock:** the Pi's clock must be right (NTP). If it's wrong at boot, the runner catches up once NTP syncs, because it reads the wall clock every tick.
