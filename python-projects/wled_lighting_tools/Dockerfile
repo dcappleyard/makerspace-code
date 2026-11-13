@@ -10,8 +10,11 @@ COPY . .
 # Unbuffered so log lines reach `docker compose logs` immediately.
 # The config lives in the mounted /data dir so the dashboard can save it
 # atomically (a bind-mounted single file can't be replaced).
+# The program (shows + schedule, git-tracked) is mounted from the checkout's
+# program/ dir, so a `git pull` reaches the runner without a rebuild.
 ENV PYTHONUNBUFFERED=1 \
-    WLED_CONFIG=/data/config.yaml
+    WLED_CONFIG=/data/config.yaml \
+    WLED_PROGRAM=/program/program.yaml
 EXPOSE 8049
 # Exec form: python is PID 1 and gets docker stop's SIGTERM (runner stops cleanly)
 CMD ["python", "runner.py"]

@@ -100,6 +100,7 @@
   .msg { border-radius: 8px; padding: 8px 10px; margin: 8px 0; white-space: pre-wrap; font-size: 13px; }
   .msg.err { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
   .msg.okm { background: color-mix(in srgb, var(--on) 12%, transparent); color: var(--on); }
+  .msg.warnm { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--text); }
   .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 14px; }
   .fields label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
   .fields input, .fields select { width: 100%; }
@@ -143,6 +144,15 @@
 </header>
 
 <main class="wrap">
+  <div class="msg err" id="progError" hidden></div>
+  <div class="msg warnm" id="progWarn" hidden></div>
+  <div class="msg warnm" id="diskNote" hidden>
+    <span id="diskText"></span>
+    <span class="row" style="margin:6px 0 0">
+      <button class="small" id="diskTake">Take the new version</button>
+      <button class="small" id="diskKeep">Keep my edits</button>
+    </span>
+  </div>
   <!-- ========================================================== Scheduler -->
   <section id="tab-scheduler" class="grid" role="tabpanel">
     <div class="card">
@@ -293,6 +303,8 @@
     <span>Unsaved changes</span>
     <button class="primary" id="btnSave">Save &amp; apply</button>
     <button id="btnRevert">Revert</button>
+    <button id="btnForce" hidden>Save anyway</button>
+    <span class="muted small" id="saveFile"></span>
     <div class="msg err" id="setErr" hidden></div>
     <div class="msg okm" id="setOk" hidden></div>
   </div>

@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 import effects
 import pixel_map
+import program
 import shows
 from schedule import Schedule
 from testpattern import load_config
@@ -75,9 +76,14 @@ def create_app(runner):
     audition = Auditioner(runner.layout)
 
     def cfg_path():
-        if runner.cfg_path is None:
+        """The file settings are read from and saved to: the program file
+        (program/program.yaml), or the machine config if there isn't one."""
+        if runner.settings_path is None:
             raise HTTPException(409, "runner has no config file")
-        return Path(runner.cfg_path)
+        return Path(runner.settings_path)
+
+    def merged(path):
+        return program.merge(runner.machine_cfg, load_config(path))
 
     async def run_cmd(name, **kw):
         fut = runner.submit(name, **kw)
@@ -223,16 +229,27 @@ def create_app(runner):
     # ------------------------------------------------------------ settings
     @app.get("/api/settings")
     def get_settings():
-        return config_edit.read_settings(cfg_path())
+        return settings_payload(cfg_path())
+
+    def settings_payload(path):
+        """Settings plus which file/version they came from. The page sends
+        `mtime` back on save, so a file changed on disk since (git pull, hand
+        edit) isn't silently overwritten."""
+        return {**config_edit.read_settings(path), "file": str(path),
+                "tracked": path == runner.watch_path, "mtime": program.mtime(path)}
 
     @app.put("/api/settings")
-    async def put_settings(body: dict = Body(...), dry_run: bool = False):
+    async def put_settings(body: dict = Body(...), dry_run: bool = False, force: bool = False):
         path = cfg_path()
+        if not dry_run and not force and body.get("mtime") is not None \
+                and body["mtime"] != program.mtime(path):
+            raise HTTPException(409, f"{path.name} changed on disk since this page loaded it "
+                                     "(git pull or a hand edit?). Reload, or save anyway to overwrite.")
         for sh in (body.get("shows") or {}).values():
             for e in (sh or {}).get("effects") or []:
                 e["options"] = _parse_options(e.get("options"))
         try:
-            cfg = config_edit.validate(body, load_config(path), runner.layout)
+            cfg = config_edit.validate(body, merged(path), runner.layout)
         except ValueError as e:
             raise HTTPException(400, str(e))
         preview = _windows_preview(cfg)
@@ -243,8 +260,8 @@ def create_app(runner):
         except ValueError as e:
             raise HTTPException(500, str(e))
         log.info("dashboard: settings saved to %s", path)
-        res = await run_cmd("apply_config", cfg=load_config(path))
-        return {**res, "schedule": preview, "settings": config_edit.read_settings(path)}
+        res = await run_cmd("apply_config", cfg=merged(path))
+        return {**res, "schedule": preview, "settings": settings_payload(path)}
 
     @app.get("/api/schedule")
     def get_schedule(days: int = 7):

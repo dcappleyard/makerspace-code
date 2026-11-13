@@ -82,7 +82,7 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
   `render(t: float, xyz: np.ndarray[N,3], meta) -> np.ndarray[N,3] uint8` (floats 0..1 also accepted)
   where `t` is seconds since the effect started, `xyz` is the pixel map, and `meta` holds the per-pixel labels from `pixels.csv` (strand, base_pair, part, slot) so effects can target stems, rings, and rods. Effects are pure functions of time and position, so they render identically on hardware and in the simulator.
 - **Effect options:** an effect can declare `OPTIONS = {name: default}`; it then gets `render(t, xyz, meta, opts)`, and an optional `prepare(opts)` validates and parses them once. Options come from `play.py -o key=value`, a show entry's `options:` mapping, or the defaults. A `seed` option left at `None` gets a random value per run (logged so a good one can be pinned; the preview's Restart re-rolls it), so "random" effects are still pure functions of `t` within a run.
-- **Shows:** a show is a named list of effects (and `wled:<id>` presets), defined in the config's `shows:` section and modelled in `shows.py` (`Entry`, `Show`, `parse_entries`, `load_shows`). Each schedule window plays one show. See "Shows, effects and a tabbed dashboard (milestone 6)".
+- **Shows:** a show is a named list of effects (and `wled:<id>` presets), defined in the `shows:` section of the program file (`program/program.yaml`, milestone 7) and modelled in `shows.py` (`Entry`, `Show`, `parse_entries`, `load_shows`). Each schedule window plays one show. See "Shows, effects and a tabbed dashboard (milestone 6)".
 - **WLED presets in a show:** an entry can be `wled:<preset_id>`. The runner stops DDP streaming and sends `POST /json/state {"ps": id}`; WLED runs its own effect until the next slot.
 - **Scheduler:** uses `astral` to compute sunset/sunrise daily. YAML config, e.g.
   ```yaml
@@ -95,7 +95,7 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
   (Before milestone 6 this was a single `schedule.rotation:` list; that form still loads as a show named `evening`.)
 - **On-time:** send `{"on": true, "bri": N}`, then start streaming.
   **Off-time:** stop streaming, then send `{"on": false}`.
-- **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). The config is `data/config.yaml` in a mounted `data/` dir (`WLED_CONFIG=/data/config.yaml`), so the dashboard can rewrite it; the container runs as uid 1000; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
+- **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). The machine config (`wled:`, `location:`) is `data/config.yaml` in a mounted `data/` dir (`WLED_CONFIG=/data/config.yaml`); the program (schedule + shows) is the tracked `program/program.yaml`, mounted live from the git checkout at `/program` (`WLED_PROGRAM`), which the runner reloads when it changes and the dashboard rewrites; the container runs as uid 1000; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
 - **Web dashboard:** built (milestone 5), on port 8049, split into three tabs in milestone 6. See "Web dashboard (milestone 5)" and "Shows, effects and a tabbed dashboard (milestone 6)" below, and README "Dashboard".
 
 ### 3. Preview / simulator
@@ -111,7 +111,7 @@ A web page on the Pi for watching and steering the sculpture, served at `http://
 Decided 2026-11-13:
 - **Scope:** all three pieces: status + controls, a live view, and a settings editor.
 - **Server:** FastAPI + uvicorn.
-- **Saving:** edits are written back to `config.yaml` with ruamel.yaml, which keeps the comments.
+- **Saving:** edits are written back to the config with ruamel.yaml, which keeps the comments (since milestone 7, to `program/program.yaml`).
 - **Password:** optional, via `ADMIN_PASSWORD`.
 
 ### Shape
@@ -325,6 +325,90 @@ Every tab shares a header: the title, state and WLED chips, and a compact **now 
 - **Page checks:** each tab at desktop and phone widths, using the same captured-data harness as milestone 5. In a real browser if the Chrome extension is connected.
 - **On the sculpture (not yet done):** an evening with the evening show, and a morning window with its own show.
 
+## The program in git (milestone 7)
+
+**Built 2026-11-13.** Differences from the plan below:
+- `play.py` and `testpattern.py` needed no changes; they only read `wled:`.
+- The server refuses a save from a page whose loaded version is older than the file (409), and the page offers "Save anyway" (`PUT /api/settings?force=true`). This wasn't in the plan.
+- The runner exits at startup with a clear message if the program can't be run (the plan only covered a bad file while running).
+- Also built: `runner.py --program PATH`; status `program: {file, tracked, mtime, error, warning}`; an unknown effect is a warning (skipped), not an error; `GET /api/settings` returns `file`, `tracked`, `mtime`; the Show builder labels a missing effect "(missing — not in this build; rebuild the image)".
+- The Pi deployment and migration are done separately after this build.
+
+Before this milestone the shows and schedule lived only in the Pi's git-ignored `data/config.yaml`, so they aren't versioned or backed up. The goal is to move them into a **tracked program file**, so they travel through git like effects do.
+
+Decided 2026-11-13:
+- **What's tracked:** the shows, the on/off windows and the defaults, which together make up the "program". Machine-specific settings (WLED IP, location, ports, password) stay local.
+- **Git:** you handle all git work yourself (pull, commit, push over SSH). There's no commit button or sync script.
+
+### Files
+
+- **`program/program.yaml` (tracked):** the `schedule:` and `shows:` sections, in exactly today's format. It starts as the Pi's current program, migrated to the new shape (see Migration).
+- **`config.yaml` locally / `data/config.yaml` on the Pi (git-ignored):** keeps `wled:` and `location:` only. `config.example.yaml` shrinks to match.
+- **How the program file is found:** `$WLED_PROGRAM`, or else `program/program.yaml` next to the code. If that file doesn't exist, `schedule:`/`shows:` from the machine config are used, so a program-less config keeps working. If both exist, the program file wins and the runner logs that the machine config's copy is ignored.
+- **`.gitignore`:** `program/*.bak` and `program/*.tmp`.
+- **`.dockerignore`:** add `program/`. The image never carries a program; it's always mounted.
+
+### Docker
+
+- **Mount:** compose mounts `./program:/program` and sets `WLED_PROGRAM=/program/program.yaml`. That's the live git checkout, not an image snapshot, and it's a directory mount so the dashboard's atomic `os.replace` save still works.
+- **Ownership:** the container already runs as uid 1000, so saved files stay owned by `pi-admin` and show up in `git status` as ordinary changes.
+- **Effects are unchanged:** they're still built into the image, so a new or changed effect still needs `docker compose up -d --build`. Program changes don't (see Reload).
+
+### Loading and live reload
+
+- **`load_program(machine_cfg)`:** returns the merged config (machine `wled:`/`location:` plus the program's `schedule:`/`shows:`). The runner, `play.py`, `testpattern.py` and the dashboard all use it.
+- **Watching the file:** the runner checks the program file's modification time every couple of seconds. After a `git pull`, a hand edit, or a save from another dashboard, it reloads and applies the new program through the existing `apply_config` path. The stream doesn't stop, and the current effect keeps playing if it's still in the show. **A `git pull` on the Pi applies new shows and windows without a restart.**
+- **Bad file:** if the file doesn't parse or validate (for example it has merge-conflict markers, no playable shows, or a bad schedule), the runner keeps the last good program. It logs the error, sets `program.error`, and the dashboard shows a red banner until the file is fixed. An unknown effect is only a warning (`program.warning`, amber banner) and is skipped.
+
+### Dashboard
+
+- **Saving:** Settings → Save & apply writes `program/program.yaml` only. The machine config is never written again.
+- **Header:** the Save & apply bar names the file being edited and notes that you commit it yourself.
+- **Reload notice:** when the file changes on disk, the page reloads its settings. If you had unsaved edits, it asks whether to keep them or take the new version, so a pull can't be silently overwritten.
+- **Missing effect:** if the program names an effect the running image doesn't have (pulled before a rebuild), the Show builder marks it "(missing — not in this build; rebuild the image)". The runner skips it and sets a warning (amber banner).
+
+### Migration (one time, done during the build)
+
+- **`python3 -m web.config_edit split <machine config> <program file>`:** moves `schedule:`/`shows:` into the program file, converting the old `schedule.rotation` form to `shows:`, and keeps comments. It then strips those sections from the machine config, keeping a `.bak` of both files.
+- **On the Pi:** run it against `data/config.yaml`. The resulting `program/program.yaml` gets committed (by you) as the tracked starting point. Today that's the `evening` show with the current rotation, scale 0.64 and the sunset − 15m → 23:00 window.
+- **On the laptop:** after pulling, copy `config.example.yaml` to `config.yaml` and set `wled.host`. The program comes from git.
+
+### Working with it
+
+- **Laptop:**
+  1. Run `runner.py --preview` and use the dashboard at `localhost:8049`.
+  2. Edit shows, and audition them along with any new effects.
+  3. The saves change `program/program.yaml`; commit it with the effect files and push.
+- **Pi:** `git pull`. Program changes apply within seconds. If the pull includes effect code, also run `docker compose up -d --build`.
+- **Pi edits:** saving in the Pi's dashboard changes the Pi's working copy. Commit and push from there over SSH, or `git checkout program/program.yaml` to discard. Editing the program on both machines between syncs gives an ordinary git merge conflict in that one file. The runner keeps playing the last good program until it's resolved.
+
+### Files changed
+
+- **New:** `program.py`, with `load_program`, the program path and the mtime watch. It could instead be a few functions in `shows.py`.
+- **Changed:**
+  - `runner.py`: load via `load_program`, the watch in the loop, a bad-file error in status.
+  - `web/config_edit.py`: read/save the program file, and the `split` command.
+  - `web/app.py`: settings path, file name and error in status.
+  - `common.js`: the file note, reload handling and error banner.
+  - `play.py`, `testpattern.py`.
+  - `docker-compose.yml`, `Dockerfile`: the `WLED_PROGRAM` env var.
+  - `.gitignore`, `.dockerignore`.
+  - `config.example.yaml`.
+  - README, PROJECT.md and the CLAUDE.md files.
+
+### Verification
+
+- **Old configs:** with no program file, a machine config with `schedule:`/`shows:` still runs as today.
+- **Split:** run it on a copy of the Pi's config. The program file reads back the same, comments survive, and the machine config is left with `wled:`/`location:` only.
+- **Live reload:**
+  - In `--preview` mode, edit `program.yaml` by hand (change a window's show, add an effect). The runner reloads within a few seconds without dropping the stream.
+  - Write a conflict-marker file: the runner keeps playing, logs the error, and the dashboard banner appears.
+  - Fix the file and the banner clears.
+- **Dashboard:**
+  - A save writes only `program/program.yaml`, and `git diff` shows just the edited lines.
+  - A disk change while the page has unsaved edits brings up the keep/take prompt.
+- **Docker (done 2026-11-13):** the Pi's `data/config.yaml` was split; the container runs from the mounted `/program/program.yaml`, files stay owned by `pi-admin`, and a change on disk (`touch`) reloads in the container within ~2 s without a restart. Still to see: a real `git pull` of a program change.
+
 ## DDP details
 
 - UDP port 4048, one packet per frame (200 × 3 = 600 bytes of data, well under one MTU).
@@ -387,7 +471,9 @@ wled_lighting_tools/
   CLAUDE.md
   README.md           setup, Pi install, WLED settings checklist
   requirements.txt    PyYAML so far; numpy, astral (+ preview deps) later
-  config.example.yaml host, brightness, schedule (windows), shows
+  config.example.yaml machine config only: wled host, location
+  program/            program.yaml: schedule (windows, defaults) + shows; tracked, reloaded live
+  program.py          program_path, load_program (merge machine config + program), check
   pixel_map.py        generates pixels.csv (+ SVG check plot); load() reads it back
   pixels.csv          pixel map
   wled/               ddp.py (sender + Streamer thread), api.py (JSON API, stdlib urllib)
@@ -402,7 +488,7 @@ wled_lighting_tools/
   web/                app.py (FastAPI), config_edit.py (ruamel round-trip), audition.py (browser-only players),
                       static/ index.html, common.js, scheduler.js, preview.js, builder.js, sculpture.js
   Dockerfile          runner image (python:3.13-slim)
-  docker-compose.yml  Pi deployment: config.yaml mount, restart unless-stopped, log rotation
+  docker-compose.yml  Pi deployment: data/ and program/ mounts, restart unless-stopped, log rotation
 ```
 
 ## Milestones
@@ -417,3 +503,4 @@ wled_lighting_tools/
    *Status:* built (`schedule.py`, `runner.py`, `Dockerfile`, `docker-compose.yml`; replaced the earlier systemd unit 2026-11-13). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. Deployed on the Pi in Docker 2026-11-13 (see "Hardware bench results"); preset hand-off and a full evening not yet checked on the sculpture.
 5. **Web dashboard:** status + controls, live view, settings editor (FastAPI, in the runner process). *Status:* built 2026-11-13 (`web/`). Tested on the Pi in `--preview` mode: every control, the settings validation/save/live-apply (comments kept), the password, and the page at desktop and phone widths, rendered from a local copy of the page fed with captured API data. The headless browser here couldn't load it over HTTP. Not yet used against the sculpture.
 6. **Shows, effects and a tabbed dashboard:** `shows/` renamed to `effects/`; named shows (`shows.py`, `shows:` config section) with per-show overrides; per-window `show:` and `schedule.default_show`; crossfade between back-to-back windows with different shows; dashboard split into Scheduler / Preview / Show builder tabs with browser-only audition (`web/audition.py`). *Status:* built 2026-11-13. Verified on the Pi in `--preview` mode: a two-show config with back-to-back windows switched morning → evening with a crossfade; all commands; audition (effect, saved show, unsaved show, bad options rejected, idle stop); settings save (renaming a show updates its window, live apply keeps the current effect playing, a legacy config migrates, comments kept); each tab rendered at desktop and phone width from a local copy of the page fed captured API data. No real-browser click-through (the Chrome extension wasn't connected). Not yet run against the sculpture.
+7. **The program in git:** shows + schedule moved to the tracked `program/program.yaml` (`program.py`), machine config reduced to `wled:`/`location:`; the runner live-reloads the file and keeps the last good program on a bad one; the dashboard saves only the program file, with stale-save (409) and changed-on-disk handling; `web.config_edit split` migrates old configs; Docker mounts `./program`. *Status:* built 2026-11-13. Verified in `--preview` mode: the old layout still runs with no program file; split on a copy of the Pi config (program reads back the same, machine config left with `wled:`/`location:`, a second run refused); live reload of a hand edit in ~1.5 s with the stream and current effect kept; a conflict-marker file keeps the last program playing with the error in status/banner; an unknown effect gives a warning and is skipped; fixing the file clears it; a dashboard save writes only the program file and doesn't trigger a second reload; a stale save gets 409 and a forced save overwrites; the banner rendered via the captured-data page harness. Deployed on the Pi 2026-11-13: config split, container runs from the mounted program file, live reload confirmed in the container.

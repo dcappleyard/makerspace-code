@@ -17,6 +17,7 @@ import io
 import os
 import re
 import shutil
+from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
@@ -342,3 +343,67 @@ def save(path, cfg):
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+# ------------------------------------------------------------------ split
+PROGRAM_HEADER = """\
+The program: shows, on/off windows and defaults. Tracked in git, so it
+travels with the effects. Edited by the dashboard (Save & apply) or by hand;
+the runner reloads it a few seconds after it changes. Machine settings
+(wled:, location:) live in the git-ignored config.yaml / data/config.yaml.
+"""
+
+
+def split(machine_path, program_path):
+    """Move schedule:/shows: out of the machine config into a program file
+    (old schedule.rotation configs are converted to shows:). Both files keep
+    their comments; the machine config's previous version is kept as .bak."""
+    from layout import Layout
+    from program import merge
+
+    machine_path, program_path = Path(machine_path), Path(program_path)
+    if program_path.exists():
+        raise SystemExit(f"{program_path} already exists; not overwriting it")
+    y = _yaml()
+    doc = y.load(machine_path.read_text())
+    prog = CommentedMap()
+    for k in ("schedule", "shows"):
+        if k in doc:
+            prog[k] = doc[k]
+    if not prog:
+        raise SystemExit(f"{machine_path} has no schedule:/shows: to move")
+    prog.yaml_set_start_comment(PROGRAM_HEADER)
+    program_path.parent.mkdir(parents=True, exist_ok=True)
+    buf = io.StringIO()
+    y.dump(prog, buf)
+    program_path.write_text(buf.getvalue())
+
+    shutil.copy2(machine_path, machine_path.with_name(machine_path.name + ".bak"))
+    for k in ("schedule", "shows"):
+        if k in doc:
+            del doc[k]
+    buf = io.StringIO()
+    y.dump(doc, buf)
+    tmp = machine_path.with_name(machine_path.name + ".tmp")
+    tmp.write_text(buf.getvalue().rstrip() + "\n")
+    os.replace(tmp, machine_path)
+
+    s = read_settings(program_path)
+    if s["legacy"]:                    # schedule.rotation -> shows: {evening: ...}
+        base = merge(_plain(load_config(machine_path)), _plain(load_config(program_path)))
+        save(program_path, validate(s, base, Layout.load()))
+    print(f"program -> {program_path}\nmachine config -> {machine_path} (previous: {machine_path.name}.bak)")
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Dashboard config tools.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sp = sub.add_parser("split", help="move schedule:/shows: from a machine config into a program file")
+    sp.add_argument("machine_config")
+    sp.add_argument("program_file", nargs="?", default=None,
+                    help="default: $WLED_PROGRAM, else program/program.yaml")
+    a = ap.parse_args()
+    if a.cmd == "split":
+        from program import program_path
+        split(a.machine_config, a.program_file or program_path())

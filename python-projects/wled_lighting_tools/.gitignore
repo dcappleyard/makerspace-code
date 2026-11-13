@@ -1,3 +1,5 @@
 config.yaml
 pixel_map_check.svg
 data/
+program/*.bak
+program/*.tmp

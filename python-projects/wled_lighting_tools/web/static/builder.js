@@ -120,7 +120,7 @@
       const isWled = e.item.startsWith("wled:");
       const sel = itemSelect(isWled ? "wled:" : e.item);
       sel.setAttribute("aria-label", "effect");
-      if (!isWled && !effectByName(e.item)) sel.prepend(el("option", { value: e.item, selected: true }, `${e.item} (missing)`));
+      if (!isWled && !effectByName(e.item)) sel.prepend(el("option", { value: e.item, selected: true }, `${e.item} (missing — not in this build; rebuild the image)`));
       const preset = el("input", { type: "number", min: "1", value: isWled ? e.item.slice(5) : "1", "aria-label": "preset id", hidden: !isWled, class: "preset" });
       const mins = el("input", { type: "number", min: "0.5", step: "0.5", value: fmtVal(e.minutes), placeholder: String(defMin), title: "minutes (blank = show default)", "aria-label": "minutes" });
       const up = el("button", { class: "small", title: "move up", disabled: i === 0 }, "↑");

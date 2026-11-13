@@ -10,7 +10,7 @@ pip install -r requirements.txt
 cp config.example.yaml config.yaml      # set wled.host to the Dig-Uno's IP (mDNS name works outside Docker)
 ```
 
-`config.yaml` is git-ignored.
+`config.yaml` is the machine config (`wled:` and `location:` only) and is git-ignored. The shows and schedule are in `program/program.yaml`, which is tracked (see "Program" below).
 
 ## Pixel map
 
@@ -60,7 +60,7 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 
 ## Runner (scheduled shows)
 
-`runner.py` turns WLED on at each window's start (`{"on": true, "bri": N}`), plays that window's show, and turns it off at the window's end. The schedule, shows, and brightness live in `config.yaml` (see `config.example.yaml`).
+`runner.py` turns WLED on at each window's start (`{"on": true, "bri": N}`), plays that window's show, and turns it off at the window's end. The schedule, shows, and brightness live in `program/program.yaml`; `config.yaml` only has `wled:` and `location:` (see `config.example.yaml`).
 
 ```bash
 python3 runner.py --schedule               # next 7 days: sunrise/sunset, on-windows and the show for each
@@ -69,13 +69,30 @@ python3 runner.py --force-on               # default show on the sculpture now, 
 python3 runner.py                          # normal scheduled operation (what the Docker container runs)
 ```
 
-- **Shows:** a show is a named list of effects, defined in the `shows:` section of the config (`morning`, `evening`, ...). Each window has an optional `show:`; `schedule.default_show` plays for windows without one, and for the dashboard's "Turn on". If back-to-back windows want different shows, the runner crossfades into the new show without turning off.
+- **Shows:** a show is a named list of effects, defined in the `shows:` section of the program file (`morning`, `evening`, ...). Each window has an optional `show:`; `schedule.default_show` plays for windows without one, and for the dashboard's "Turn on". If back-to-back windows want different shows, the runner crossfades into the new show without turning off.
 - **Show entries:** an effect name, `wled:<preset id>`, or `{effect: name, minutes: N, options: {...}}` (the old `{show: name}` key is still read). For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
 - **Per-show overrides:** a show can set `scale`, `minutes_each`, `shuffle` and `transition_seconds`. Anything it leaves out comes from the `schedule:` globals.
-- **Old configs:** a config with only `schedule.rotation` (no `shows:`) loads as one show named `evening`, which is the default. The dashboard's first save writes the new shape and drops `schedule.rotation`.
+- **Old configs:** a config with only `schedule.rotation` (no `shows:`), or with `schedule:`/`shows:` in the machine config and no program file, loads as one show named `evening`, which is the default. The dashboard's first save writes the new shape and drops `schedule.rotation`.
 - **Failures:** if WLED is unreachable, API calls are retried every 30 s and streaming carries on. An effect that errors keeps its last good frame. Invalid show entries are logged and skipped.
 - **Stopping mid-window** (Ctrl-C, SIGTERM, crash) only stops streaming. WLED falls back to its own effect ~2.5 s later, which is the intended fallback.
 - **YAML note:** PyYAML reads a bare `on:` key as boolean `true`. The schedule parser accepts that, so `on:` / `off:` work as written.
+
+### Program (shows + schedule in git)
+
+The **program** is the `schedule:` and `shows:` sections, kept in the tracked file `program/program.yaml` so it travels through git like the effects. The **machine config** (`config.yaml` locally, `data/config.yaml` in Docker; git-ignored) has only `wled:` and `location:`. The program file is `$WLED_PROGRAM` or `program/program.yaml`, or `--program PATH`. If there's no program file, `schedule:`/`shows:` in the machine config are used, so the old layout still works. Otherwise the program file wins.
+
+- **Live reload:** the runner checks the program file's mtime every ~2 s and reloads it without stopping the stream. The current effect keeps playing if it's still in the show. A `git pull`, a hand edit and a dashboard save all take this path.
+- **Bad file:** at startup the runner exits with a message if the program can't be run. While running, a file with a YAML error (merge-conflict markers, say), no playable shows or a bad schedule is rejected: the runner keeps playing the last good program, logs the error and sets `program.error` in the status. An effect that isn't in this build gives `program.warning` and is skipped. The dashboard shows a red banner for an error and an amber one for a warning.
+- **Migrating an old config (once):** `python3 -m web.config_edit split <machine config> [program file]` moves `schedule:`/`shows:` into the program file (comments kept), strips them from the machine config (keeping `<config>.bak`), and refuses if the program file already exists.
+
+**Laptop ↔ Pi workflow:**
+
+- **Laptop:** `cp config.example.yaml config.yaml` and set `wled.host`. Run `runner.py --preview` and open `http://localhost:8049/`. Design effects (the preview server reloads them live) and shows, then commit the effect files and `program/program.yaml` and push.
+- **Pi:** `git pull`. Program changes apply within seconds. If effects changed, also run `docker compose up -d --build`.
+- **Pi dashboard edits** change the Pi's working copy of `program/program.yaml`. Commit and push them over SSH, or discard with `git checkout program/program.yaml`.
+- **Editing on both machines** between syncs gives a normal git merge conflict in that file. The runner keeps playing the last good program until it's resolved.
+
+Git is manual: there's no commit button or sync script.
 
 ### Dashboard
 
@@ -99,7 +116,9 @@ The runner serves a web dashboard at `http://<pi>:8049/` (`--web-port`, 0 turns 
   - Effects list: reorder, minutes, per-effect options, and `wled:<id>` presets, with the total time for one pass.
   - **Audition** opens the Preview tab with your unsaved edits. **Play on sculpture now** needs the show saved first.
 
-Changes are checked before saving: window expressions are parsed, and effect options go through the effect's own `prepare()`. They're then written back with ruamel.yaml (`schedule:` and `shows:`), so comments and order survive, and applied without restarting the stream; the current effect keeps playing if it's still in the show. The previous file is kept as `config.yaml.bak`. `wled:` and `location:` stay hand-edited and need a restart.
+Changes are checked before saving: window expressions are parsed, and effect options go through the effect's own `prepare()`. They're then written back with ruamel.yaml, so comments and order survive, and applied without restarting the stream; the current effect keeps playing if it's still in the show. A save writes only the program file (or the machine config, if there's no program file), and the save bar says which file and that you commit it yourself. The previous file is kept as `.bak`. `wled:` and `location:` stay hand-edited and need a restart.
+
+If the program file changes on disk, a page with no unsaved edits reloads its settings; with unsaved edits it asks "Take the new version / Keep my edits". The server refuses a save from a page whose loaded version is older than the file (409), and the page offers "Save anyway" (`PUT /api/settings?force=true`). The Show builder labels an effect this build doesn't have as "(missing — not in this build; rebuild the image)".
 
 **Password:** set `ADMIN_PASSWORD` in `docker-compose.yml` to require HTTP Basic auth (any user name). Empty means open to the LAN.
 
@@ -122,14 +141,14 @@ The runner and its dashboard run permanently in Docker (`docker-compose.yml`, `r
 
 ```bash
 cd ~/dev/makerspace-code/python-projects/wled_lighting_tools
-mkdir -p data && cp config.example.yaml data/config.yaml && nano data/config.yaml
+mkdir -p data && cp config.example.yaml data/config.yaml && nano data/config.yaml   # wled.host, location
 docker compose run --rm wled-show-runner python runner.py --schedule   # sanity-check location/timezone
 docker compose up -d --build
 docker compose logs -f
 ```
 
-- **Config:** in Docker, the config is `data/config.yaml` (git-ignored), mounted at `/data`. The image sets `WLED_CONFIG=/data/config.yaml`, so every tool run inside the container uses it. The container runs as uid 1000 (the Pi's login user), so files the dashboard writes stay editable. If you deployed before the dashboard existed, move the old config once: `mkdir -p data && mv config.yaml data/`.
-- **Updating:** `git pull && docker compose up -d --build`. The image is a snapshot, so edits in the checkout don't reach the running service until you rebuild. To apply a hand edit to `data/config.yaml`, run `docker compose restart`, or just use the dashboard.
+- **Config:** in Docker, the machine config is `data/config.yaml` (git-ignored, only `wled:` and `location:`), mounted at `/data`. The image sets `WLED_CONFIG=/data/config.yaml`, so every tool run inside the container uses it. The program is `program/program.yaml` from the git checkout, mounted at `/program` (`WLED_PROGRAM=/program/program.yaml`); `program/` isn't in the image. The container runs as uid 1000 (the Pi's login user), so files the dashboard writes stay editable. If you deployed before the dashboard existed, move the old config once: `mkdir -p data && mv config.yaml data/`. An existing install whose `data/config.yaml` still has `schedule:`/`shows:` should run the split once: `python3 -m web.config_edit split data/config.yaml program/program.yaml`, then commit the program file.
+- **Updating:** `git pull` applies program changes (`program/program.yaml`) within seconds, with no restart. New or changed effects and code are built into the image, so they need `git pull && docker compose up -d --build`. To apply a hand edit to `data/config.yaml` (`wled:`/`location:`), run `docker compose restart`.
 - **Only one sender at a time.** Before you run `play.py`, `testpattern.py` or `runner.py --force-on` against the sculpture, run `docker compose stop`. Afterwards, run `docker compose start`. Two DDP streams at once make the sculpture flicker. To run a one-off inside the image, use `docker compose run --rm wled-show-runner python runner.py --force-on`.
 - **Logs:** `docker compose logs`. They're capped at about 3 MB (json-file rotation) to spare the SD card.
 - **Clock:** the Pi's clock must be right (NTP). If it's wrong at boot, the runner catches up once NTP syncs, because it reads the wall clock every tick.

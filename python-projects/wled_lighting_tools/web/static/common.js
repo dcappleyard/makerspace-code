@@ -161,8 +161,38 @@ function checkLater() {
     } catch (e) { showMsg("setErr", e.message); }
   }, 500);
 }
+function renderProgram() {
+  const pr = App.status && App.status.program;
+  if (!pr) return;
+  const name = pr.file.split("/").slice(-2).join("/");
+  showMsg("progError", pr.error ? `${name} couldn't be loaded, so the sculpture is still playing the previous program:\n${pr.error}` : "");
+  showMsg("progWarn", !pr.error && pr.warning ? `${name}: ${pr.warning} (skipped until it's available — rebuild the image if it's a new effect)` : "");
+  $("saveFile").textContent = pr.tracked ? `Saves to ${name}; commit it yourself.` : `Saves to ${name}.`;
+  // Changed on disk (git pull, hand edit, another dashboard)?
+  if (!App.settings || pr.error || pr.mtime == null || App.settings.mtime == null || pr.mtime === App.settings.mtime) return;
+  if (App.diskSeen === pr.mtime) return;
+  App.diskSeen = pr.mtime;
+  if (JSON.stringify(App.settings) === App.savedJson) {
+    loadSettings().then(() => { showMsg("setOk", `${name} changed on disk; reloaded.`); $("saveBar").hidden = false;
+      setTimeout(() => { showMsg("setOk", ""); if (JSON.stringify(App.settings) === App.savedJson) $("saveBar").hidden = true; }, 4000); });
+  } else {
+    $("diskText").textContent = `${name} changed on disk (git pull or a hand edit?) while you have unsaved edits here.`;
+    $("diskNote").hidden = false;
+  }
+}
+App.on("status", renderProgram);
+$("diskTake").onclick = () => { $("diskNote").hidden = true; loadSettings(); };
+$("diskKeep").onclick = () => {
+  $("diskNote").hidden = true;
+  App.settings.mtime = App.status.program.mtime;      // saving now overwrites the disk version
+  App.savedJson = JSON.stringify({ ...JSON.parse(App.savedJson), mtime: App.settings.mtime });
+  markDirty();
+};
+
 async function loadSettings() {
   App.settings = await api("GET", "/api/settings");
+  App.diskSeen = App.settings.mtime;
+  $("diskNote").hidden = true; $("btnForce").hidden = true;
   App.savedJson = JSON.stringify(App.settings);
   $("saveBar").hidden = true;
   for (const t of ["scheduler", "builder"]) $("tabbtn-" + t).classList.remove("dirty");
@@ -170,11 +200,12 @@ async function loadSettings() {
   App.emit("settings", App.settings);
   App.emit("schedule", await api("GET", "/api/schedule"));
 }
-async function saveSettings() {
+async function saveSettings(force) {
   showMsg("setErr", ""); showMsg("setOk", "");
-  $("btnSave").disabled = true;
+  $("btnSave").disabled = true; $("btnForce").hidden = true;
   try {
-    const j = await api("PUT", "/api/settings", App.settings);
+    const j = await api("PUT", "/api/settings" + (force === true ? "?force=true" : ""), App.settings);
+    App.diskSeen = j.settings.mtime;
     App.settings = j.settings; App.savedJson = JSON.stringify(App.settings);
     $("saveBar").hidden = false;
     for (const t of ["scheduler", "builder"]) $("tabbtn-" + t).classList.remove("dirty");
@@ -182,9 +213,13 @@ async function saveSettings() {
     App.status = j.status; App.statusAt = Date.now(); renderNowBar(); App.emit("status", App.status);
     showMsg("setOk", "Saved to config.yaml and applied.");
     setTimeout(() => { showMsg("setOk", ""); if (JSON.stringify(App.settings) === App.savedJson) $("saveBar").hidden = true; }, 3000);
-  } catch (e) { showMsg("setErr", e.message); }
+  } catch (e) {
+    showMsg("setErr", e.message);
+    if (/changed on disk/.test(e.message)) $("btnForce").hidden = false;
+  }
   $("btnSave").disabled = false;
 }
+$("btnForce").onclick = () => saveSettings(true);
 $("btnSave").onclick = saveSettings;
 $("btnRevert").onclick = loadSettings;
 window.addEventListener("beforeunload", (ev) => {

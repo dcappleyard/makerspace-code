@@ -29,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 import effects
+import program
 from layout import Layout
 from schedule import Interval, Schedule
 from shows import load_shows, parse_entries
@@ -134,9 +135,16 @@ def _iso(t):
 
 
 class Runner:
-    def __init__(self, cfg, args, cfg_path=None):
+    def __init__(self, cfg, args, cfg_path=None, machine_cfg=None, program_file=None):
         self.args = args
-        self.cfg_path = cfg_path
+        self.cfg_path = cfg_path                  # machine config
+        self.machine_cfg = machine_cfg if machine_cfg is not None else cfg
+        # The program (schedule:/shows:) file being watched, and the file the
+        # dashboard edits: the program file if it exists, else the machine config.
+        self.watch_path = Path(program_file) if program_file else program.program_path()
+        self.program_mtime = program.mtime(self.watch_path)
+        self.next_watch = 0.0
+        self.program_error = self.program_warning = None
         wc = cfg.get("wled", {})
         self.show = None
         self._load_schedule(cfg)
@@ -361,6 +369,7 @@ class Runner:
                     self.next_entry()
                 self.maybe_reassert()
             self.retry_pending()
+            self.watch_program()
             self.update_status()
             self.resolve_commands()
             self.stopping.wait(TICK)
@@ -515,6 +524,7 @@ class Runner:
 
     def cmd_apply_config(self, cfg):
         """Adopt new schedule:/shows: settings without stopping the stream."""
+        self.program_mtime = program.mtime(self.watch_path)    # our own save: don't reload it again
         old_bri, cur, cur_show = self.bri, self.entry, (self.show.name if self.show else None)
         self._load_schedule(cfg)
         if not self.shows:
@@ -545,6 +555,35 @@ class Runner:
                 self.next_entry(first=True)
         if self.window is not None and self.bri != old_bri and self.bri is not None:
             self.api_call("on", "on", **self._on_state())
+
+    @property
+    def settings_path(self):
+        """The file the dashboard reads and writes."""
+        return self.watch_path if self.watch_path.exists() else self.cfg_path
+
+    def watch_program(self):
+        """Reload the program when its file changes (git pull, hand edit, another
+        dashboard). A bad file leaves the last good program playing."""
+        if time.monotonic() < self.next_watch:
+            return
+        self.next_watch = time.monotonic() + 2
+        m = program.mtime(self.watch_path)
+        if m == self.program_mtime:
+            return
+        self.program_mtime = m
+        try:
+            cfg, _ = program.load_program(self.machine_cfg, self.watch_path, quiet=True)
+            warning = program.check(cfg)
+        except ValueError as e:
+            if self.program_error != str(e):
+                log.error("program %s not loaded, still playing the previous one: %s", self.watch_path.name, e)
+            self.program_error = str(e)
+            return
+        log.info("program changed on disk; reloading %s", self.watch_path)
+        self.program_error, self.program_warning = None, warning
+        if warning:
+            log.warning("program: %s", warning)
+        self.cmd_apply_config(cfg)
 
     def _health_loop(self):
         while not self.stopping.is_set():
@@ -605,6 +644,9 @@ class Runner:
             "wled": self.wled_health,
             "pending": [d for _, d, _ in self.pending.values()],
             "streaming": self.streamer is not None and self.mixer.cur is not None,
+            "program": {"file": str(self.settings_path), "tracked": self.watch_path.exists(),
+                        "mtime": self.program_mtime, "error": self.program_error,
+                        "warning": self.program_warning},
         }
         with self._status_lock:
             self._status = st
@@ -636,6 +678,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
                     help="config file (default: $WLED_CONFIG, else config.yaml here)")
+    ap.add_argument("--program", default=str(program.program_path()),
+                    help="program file: shows + schedule (default: $WLED_PROGRAM, else program/program.yaml here)")
     ap.add_argument("--host", help="WLED host (overrides config)")
     ap.add_argument("--preview", action="store_true", help="DDP to 127.0.0.1 and skip WLED API calls")
     ap.add_argument("--also", action="append", default=[], help="additional DDP target (repeatable)")
@@ -652,11 +696,20 @@ def main():
     cfg_path = Path(a.config)
     if not cfg_path.exists():
         sys.exit(f"{cfg_path} not found (copy config.example.yaml)")
-    cfg = load_config(cfg_path)
+    machine = load_config(cfg_path)
+    try:
+        cfg, prog_file = program.load_program(machine, a.program)
+        warning = program.check(cfg)
+    except ValueError as e:
+        sys.exit(f"can't run the program: {e}")
+    log.info("program: %s", prog_file or f"{cfg_path} (no {Path(a.program).name})")
+    if warning:
+        log.warning("program: %s", warning)
     if a.schedule:
         return print_schedule(cfg, a.days)
 
-    r = Runner(cfg, a, cfg_path)
+    r = Runner(cfg, a, cfg_path, machine_cfg=machine, program_file=a.program)
+    r.program_warning = warning
     r.logbuf = LogBuffer()
     r.logbuf.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%m-%d %H:%M:%S"))
     logging.getLogger().addHandler(r.logbuf)

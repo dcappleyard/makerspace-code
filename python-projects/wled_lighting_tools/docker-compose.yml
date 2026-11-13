@@ -1,5 +1,7 @@
 # Permanent deployment on the Pi (see README "Install on the Pi").
 #   mkdir -p data && cp config.example.yaml data/config.yaml   # then set wled.host
+# The program (shows + schedule) is program/program.yaml from the git checkout,
+# mounted live: `git pull` updates it without a rebuild (effects still need --build).
 #   docker compose up -d --build
 #   docker compose logs -f
 # Dashboard: http://<pi>:8049/
@@ -8,13 +10,14 @@
 services:
   wled-show-runner:
     build: .
-    # Run as the Pi's login user, so files the dashboard writes in data/
-    # (config.yaml, config.yaml.bak) stay editable without sudo.
+    # Run as the Pi's login user, so files the dashboard writes (program/program.yaml
+    # and its .bak) stay owned by you and editable/committable without sudo.
     user: "1000:1000"
     ports:
       - "8049:8049"
     volumes:
-      - ./data:/data
+      - ./data:/data                   # machine config (git-ignored)
+      - ./program:/program             # program.yaml (tracked; dashboard saves land here)
     environment:
       TZ: America/Chicago
       # Protects the dashboard with HTTP Basic auth (any user name). Empty = open on the LAN.
