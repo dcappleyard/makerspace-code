@@ -1,6 +1,7 @@
 # Copy to config.yaml (git-ignored) and set the real host.
 wled:
-  host: wled-sculpture.local   # mDNS name or IP of the Dig-Uno
+  host: 192.168.1.50           # IP of the Dig-Uno (use a DHCP reservation; .local mDNS
+                               # names don't resolve inside Docker, but work from a laptop)
   ddp_port: 4048
   fps: 40
   # api_port: 80               # WLED JSON API port (only change for testing)

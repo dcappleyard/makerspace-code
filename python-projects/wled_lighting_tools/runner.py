@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Show runner: streams the rotation to WLED during the scheduled windows.
 
-    python3 runner.py                     # run per config.yaml (what systemd starts)
+    python3 runner.py                     # run per config.yaml (what the Docker container runs)
     python3 runner.py --schedule          # print the next 7 days of windows and exit
     python3 runner.py --force-on          # ignore the schedule, run the rotation now
     python3 runner.py --preview --force-on   # DDP to the local preview, no WLED API calls

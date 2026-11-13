@@ -2,7 +2,7 @@
 
 Working spec for `wled_lighting_tools/`. This is the document to revise before and during the build; `CLAUDE.md` in this folder is a short summary that points here.
 
-Status: milestones 1–4 built. **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". Not yet deployed to a Pi (being sourced).
+Status: milestones 1–4 built. **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". **Deployed on the Pi 5 in Docker (2026-11-13)**; first scheduled evening on the sculpture still to check.
 
 ## Goal
 
@@ -17,7 +17,7 @@ The Dig-Uno firmware is not modified. All control goes through WLED's network in
 - **Controller:** QuinLED Dig-Uno v3 (ESP32, WLED), 2 outputs:
   - Output 1: GPIO16, start 0, length 100 (strings 1–2)
   - Output 2: GPIO3, start 100, length 100 (strings 3–4)
-- **Network:** controller is reachable on the LAN by mDNS name or IP. The real host goes in config; nothing is hardcoded.
+- **Network:** controller is reachable on the LAN by mDNS name or IP; the Pi deployment uses its IP (DHCP reservation), since `.local` doesn't resolve inside Docker. The real host goes in config; nothing is hardcoded.
 - **Location:** Madison, WI (about 43.07 N, -89.40 W), timezone America/Chicago.
 
 ## Sculpture geometry
@@ -91,7 +91,7 @@ Time & Macros timers turn on a built-in preset at sunset and turn it off late at
   ```
 - **On-time:** send `{"on": true, "bri": N}`, then start streaming.
   **Off-time:** stop streaming, then send `{"on": false}`.
-- **Deployment:** systemd service with auto-restart.
+- **Deployment:** Docker on the Pi (`Dockerfile` + `docker-compose.yml`, `restart: unless-stopped`, so it starts at boot and after crashes). `config.yaml` is bind-mounted read-only; logs capped by json-file rotation. Only one DDP sender at a time: stop the container before bench tools touch the sculpture.
 - **Later (optional):** small FastAPI web UI to pick a show and edit the schedule.
 
 ### 3. Preview / simulator
@@ -124,7 +124,13 @@ Renders shows from the pixel map so they can be developed without the hardware. 
 - **Strands:** output 1 = 3'→5', output 2 = 5'→3', matching `OUTPUT1_STRAND = "3to5"`. No swap needed.
 - **Brightness:** `--scale` (runner/tool side) dims DDP and `ramp` fades smoothly. WLED's master brightness (`power on --bri 60`) had **no effect on DDP**.
 
-Still to check on hardware: the runner's `wled:<id>` preset hand-off (`{"live": false, "ps": id}`), a full scheduled evening, and the systemd service once a Pi is available.
+Still to check on hardware: the runner's `wled:<id>` preset hand-off (`{"live": false, "ps": id}`) and a full scheduled evening.
+
+**Pi deployment (2026-11-13):**
+- **Setup:** Pi 5 (1 GB, Debian 13), Docker 29.
+- **Container:** builds on arm64, and `--schedule` inside it shows the right Madison times in CST.
+- **Restarts:** after the process exits, Docker restarts it on its own. On SIGTERM it stops cleanly (exit 0, <0.5 s). After a reboot it came back by itself.
+- **Network:** the Pi (192.168.30.x) reaches the Dig-Uno (192.168.20.233) through the router. The firewall must allow TCP 80 and UDP 4048. This hasn't been checked yet: WLED was offline during the deployment.
 
 ## Questions to settle
 
@@ -165,7 +171,8 @@ wled_lighting_tools/
   runner.py           scheduler + rotation + streaming loop
   testpattern.py      bench/test CLI
   preview/            server.py (DDP receiver + HTTP/SSE) + index.html (canvas 3D view)
-  systemd/            wled-show-runner.service
+  Dockerfile          runner image (python:3.13-slim)
+  docker-compose.yml  Pi deployment: config.yaml mount, restart unless-stopped, log rotation
 ```
 
 ## Milestones
@@ -176,6 +183,6 @@ wled_lighting_tools/
    *Status:* `pixel_map.py` and `preview/` (stdlib DDP receiver + SSE → canvas 3D view) built and checked with `testpattern.py` at ~40 fps. It can also render shows locally (no DDP) with live reload; see milestone 3.
 3. **Shows:** show interface, loader, and a first handful of shows designed for the sculpture's shape.
    *Status:* built. `layout.Layout` (meta), `shows.Player` (clock, scale, hot reload, keeps last good frame on error), `play.py`, and six shows: `rainbow_helix`, `sequence` (A/T/G/C read-out), `ring_spin`, `strand_flow`, `twinkle`, `firework` (rocket up the rod, random-palette burst, twinkling fall). The preview can run shows locally with live reload. Checked in the preview only, not on the sculpture.
-4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, systemd unit.
-   *Status:* built (`schedule.py`, `runner.py`, `systemd/wled-show-runner.service`). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. **Not yet run on a Pi** (being sourced); preset hand-off not yet checked on the sculpture.
+4. **Runner:** astral scheduler, YAML config, rotation incl. `wled:<id>`, on/off handling, Docker deployment.
+   *Status:* built (`schedule.py`, `runner.py`, `Dockerfile`, `docker-compose.yml`; replaced the earlier systemd unit 2026-11-13). Tested on this Mac against the preview and a fake WLED JSON API: window on/off at the scheduled minute, rotation with crossfades, preset hand-off (DDP pauses), bad entries skipped, WLED-unreachable retries every 30 s while streaming continues, clean SIGTERM. Deployed on the Pi in Docker 2026-11-13 (see "Hardware bench results"); preset hand-off and a full evening not yet checked on the sculpture.
 5. **Optional:** FastAPI web UI for picking a show and editing the schedule.

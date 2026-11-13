@@ -1,0 +1,19 @@
+# Permanent deployment on the Pi (see README "Install on the Pi").
+#   cp config.example.yaml config.yaml   # first! otherwise Docker creates a config.yaml/ directory
+#   docker compose up -d --build
+#   docker compose logs -f
+# Only one thing may stream DDP to the sculpture: `docker compose stop` before
+# running play.py / testpattern.py / runner.py --force-on against it.
+services:
+  wled-show-runner:
+    build: .
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      TZ: America/Chicago
+    restart: unless-stopped            # comes back after reboots and crashes
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"                 # keep SD-card log use bounded
+        max-file: "3"

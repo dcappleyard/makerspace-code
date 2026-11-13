@@ -7,7 +7,7 @@ Show runner and bench tools for the double-helix light sculpture (QuinLED Dig-Un
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp config.example.yaml config.yaml      # set wled.host to the Dig-Uno's mDNS name or IP
+cp config.example.yaml config.yaml      # set wled.host to the Dig-Uno's IP (mDNS name works outside Docker)
 ```
 
 `config.yaml` is git-ignored.
@@ -62,7 +62,7 @@ The preview stands in for the Dig-Uno. It listens for DDP on udp/4048 and draws 
 python3 runner.py --schedule               # next 7 days: sunrise/sunset and on-windows
 python3 runner.py --preview --force-on     # rotation into the local preview now, no WLED API calls
 python3 runner.py --force-on               # rotation on the sculpture now, ignoring the schedule
-python3 runner.py                          # normal scheduled operation (what systemd runs)
+python3 runner.py                          # normal scheduled operation (what the Docker container runs)
 ```
 
 - **Rotation entries:** a show name, `wled:<preset id>`, or `{show: name, minutes: N}`. For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
@@ -70,20 +70,33 @@ python3 runner.py                          # normal scheduled operation (what sy
 - **Stopping mid-window** (Ctrl-C, SIGTERM, crash) only stops streaming. WLED falls back to its own effect ~2.5 s later, which is the intended fallback.
 - **YAML note:** PyYAML reads a bare `on:` key as boolean `true`. The schedule parser accepts that, so `on:` / `off:` work as written.
 
-### Install on the Pi
+### Install on the Pi (Docker)
+
+The runner runs permanently in Docker (`docker-compose.yml`, `restart: unless-stopped`), so it comes back after reboots and crashes. The preview isn't part of it; run that from a venv as above.
+
+**One-time setup:**
+
+- Install Docker. This also enables `docker.service` at boot. Log out and back in after adding yourself to the `docker` group.
+  ```bash
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo usermod -aG docker $USER
+  ```
+- Give the Dig-Uno a **DHCP reservation** on the router, and put that IP in `wled.host`. `.local` mDNS names don't resolve inside the container. The runner would just keep retrying, and the sculpture would stay on WLED's fallback effect.
+
+**Deploy:**
 
 ```bash
-git clone <this repo> ~/makerspace-code      # or pull
-cd ~/makerspace-code/python-projects/wled_lighting_tools
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp config.example.yaml config.yaml && nano config.yaml
-.venv/bin/python runner.py --schedule        # sanity-check location/timezone
-sudo cp systemd/wled-show-runner.service /etc/systemd/system/   # edit User/paths if not pi / ~/makerspace-code
-sudo systemctl daemon-reload && sudo systemctl enable --now wled-show-runner
-journalctl -u wled-show-runner -f
+cd ~/dev/makerspace-code/python-projects/wled_lighting_tools
+cp config.example.yaml config.yaml && nano config.yaml     # before the first `up`, or Docker makes a config.yaml/ directory
+docker compose run --rm wled-show-runner python runner.py --schedule   # sanity-check location/timezone
+docker compose up -d --build
+docker compose logs -f
 ```
 
-The Pi's clock must be right (NTP). The unit waits for `time-sync.target`.
+- **Updating:** `git pull && docker compose up -d --build`. The image is a snapshot, so edits in the checkout don't reach the running service until you rebuild. To apply a `config.yaml` change, run `docker compose restart`.
+- **Only one sender at a time.** Before you run `play.py`, `testpattern.py` or `runner.py --force-on` against the sculpture, run `docker compose stop`. Afterwards, run `docker compose start`. Two DDP streams at once make the sculpture flicker. To run a one-off inside the image, use `docker compose run --rm wled-show-runner python runner.py --force-on`.
+- **Logs:** `docker compose logs`. They're capped at about 3 MB (json-file rotation) to spare the SD card.
+- **Clock:** the Pi's clock must be right (NTP). If it's wrong at boot, the runner catches up once NTP syncs, because it reads the wall clock every tick.
 
 ## WLED settings checklist
 
