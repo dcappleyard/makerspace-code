@@ -102,7 +102,8 @@ void logBattery(const char *event)
     for (int i = 0; i < BATTERY_ADC_SAMPLES; i++)
         sum += analogReadMilliVolts(BATTERY_ADC_PIN);
     int a0 = sum / BATTERY_ADC_SAMPLES;
-    if (strcmp(event, "upload") != 0) // uploads run with WiFi up: under load
+    // Uploads and failed WiFi attempts read with the radio just on: under load.
+    if (strcmp(event, "upload") != 0 && strncmp(event, "wifi_fail", 9) != 0)
         lastRestBatteryMv = (int)(a0 * BATTERY_DIVIDER);
 
     time_t now = time(nullptr);

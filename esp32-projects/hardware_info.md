@@ -29,12 +29,17 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
 - Product page: https://www.seeedstudio.com/XIAO-ESP32S3-Sense-p-5639.html
 - PlatformIO board: `seeed-xiao-esp32-s3-sense`, from the same `platform-seeedboards` platform as the EE03 projects. Its board JSON already sets `qio_opi` memory, `BOARD_HAS_PSRAM` and `default_8MB.csv`.
 - Camera: OV2640 on earlier kits; Seeed has since shipped OV3660 modules. The firmware reads the sensor PID at boot and reports the model, so either works.
-  - The OV3660 needs vflip plus brightness/saturation tweaks to look right. These are borrowed from the core's CameraWebServer example; see `camera.cpp`.
+  - The OV3660 needs vflip plus brightness/saturation tweaks to look right. These are borrowed from the core's CameraWebServer example; see `camera.cpp`. The photobooth leaves out the brightness +1, because its photos were coming out blown out.
   - DVP pin map: `CAMERA_MODEL_XIAO_ESP32S3` in the Arduino-ESP32 core's `libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h`. It's copied into `xiao_s3_sense_webcam/src/cam_config.h`.
   - The camera driver (`esp32-camera`) ships with the core, so no `lib_deps` are needed.
 - microSD (on the expansion board): SPI on the XIAO's default SPI pins, SCK=GPIO7, MISO=GPIO8, MOSI=GPIO9, CS=GPIO21.
   - GPIO21 is also the user LED, so the LED flickers with card access.
   - These pins are entirely separate from the EE03 SD mod's (11/12/13/39).
+- WiFi antenna: an external 2.4 GHz antenna on the XIAO's U.FL connector, and its position is touchy.
+  - In the photobooth's case, with the antenna too close to the LiPo, the radio heard almost nothing. A full scan found **0 networks**, and connects failed with `AUTH_EXPIRE` (reason 2: the AP was heard once, then the auth exchange got no reply).
+  - Reseating the antenna and moving it away from the battery fixed it at once (2026-11-14).
+  - Keep it clear of the battery, the display's backing and any metal, and press the U.FL straight down until it clicks.
+  - If WiFi stops working with no code change, check the antenna first. The photobooth logs the disconnect reason and an SSID scan on every failed connect; see its README.
 - Heat: the ESP32-S3 + camera run noticeably warm when streaming continuously. That's a known trait of this board; a small heatsink or airflow helps for always-on use.
 - Deep sleep: see the Sense deep-sleep current note under the EE03 section above. The webcam never sleeps, but any battery project on this board should power the camera down first.
 - Used by: `xiao_s3_sense_webcam/` (LAN web camera; see its README):

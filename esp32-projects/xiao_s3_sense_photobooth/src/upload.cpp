@@ -71,8 +71,15 @@ size_t uploadPending()
     uint32_t start = millis();
     if (!wifiUp())
     {
-        drawMessage("Upload later", "no WiFi");
-        delay(1500);
+        // On battery there's no serial log, so the reason goes on screen and
+        // into the battery log (it reaches the server with the next upload
+        // that gets through, and records the voltage at the failure).
+        String why = String("no WiFi: ") + wifiFailure();
+        drawMessage("Upload later", why.c_str());
+        String event = String("wifi_fail:") + wifiFailure();
+        event.replace(' ', '_');
+        logBattery(event.c_str());
+        delay(3000);
         return 0;
     }
     // Before anything else: sets the clock if it was never set, so the next

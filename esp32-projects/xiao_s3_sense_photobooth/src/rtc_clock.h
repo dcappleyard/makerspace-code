@@ -12,6 +12,10 @@ String formatLocalTime();  // local "YYYY-MM-DD HH:MM:SS TZ", or "not set"
 // false when include/secrets.h has no WIFI_SSID.
 bool wifiUp();     // STA connect, bounded by WIFI_CONNECT_TIMEOUT_MS; true when connected
 void wifiDown();   // disconnect and WIFI_OFF
+// Why the last wifiUp() failed, short enough for the screen: the driver's
+// disconnect reason plus the SSID's RSSI from a scan, or "SSID not seen".
+// The full detail goes to Serial. "" after a success.
+const char *wifiFailure();
 bool ntpSyncNow(); // with WiFi up: SNTP sync, then write the RTC; true on a sync
 // With WiFi up: set the clock (and RTC) from the photo server's HTTP Date header
 // (SERVER_URL in secrets.h) -- no NTP or outside access needed.

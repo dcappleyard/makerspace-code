@@ -104,11 +104,64 @@ void onSntpSync(struct timeval *) { sntpSynced = true; }
 
 } // namespace
 
+namespace
+{
+// Diagnostics for a failed wifiUp(): the driver's last disconnect reason
+// (set from the event task) and a short summary for the screen / battery log.
+volatile uint8_t lastDisconnectReason = 0;
+bool disconnectHooked = false;
+char failureText[40] = "";
+
+// After a failed connect, while still in STA mode: is the SSID on the air,
+// and how strong? Prints every match (a mesh can have several APs); returns
+// the strongest RSSI, or 0 if the SSID wasn't seen at all.
+int scanForSsid(const char *ssid)
+{
+    WiFi.disconnect(); // stop the connect attempt; stays in STA mode for the scan
+    int n = WiFi.scanNetworks();
+    if (n < 0)
+    {
+        Serial.printf("WiFi: scan failed (%d)\n", n);
+        return 0;
+    }
+    int best = 0;
+    for (int i = 0; i < n; i++)
+    {
+        if (WiFi.SSID(i) != ssid)
+            continue;
+        Serial.printf("WiFi: scan: \"%s\" seen: RSSI %d dBm, channel %d, BSSID %s, auth mode %d\n", ssid,
+                      WiFi.RSSI(i), WiFi.channel(i), WiFi.BSSIDstr(i).c_str(), (int)WiFi.encryptionType(i));
+        if (best == 0 || WiFi.RSSI(i) > best)
+            best = WiFi.RSSI(i);
+    }
+    if (best == 0)
+    {
+        Serial.printf("WiFi: scan: \"%s\" not seen among %d networks:", ssid, n);
+        for (int i = 0; i < n && i < 10; i++)
+            Serial.printf(" \"%s\"(%d, ch %d)", WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+        Serial.println();
+    }
+    WiFi.scanDelete();
+    return best;
+}
+} // namespace
+
+const char *wifiFailure() { return failureText; }
+
 #ifdef WIFI_SSID
 bool wifiUp()
 {
     if (WiFi.status() == WL_CONNECTED)
         return true;
+    if (!disconnectHooked)
+    {
+        WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info)
+                     { lastDisconnectReason = info.wifi_sta_disconnected.reason; },
+                     ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+        disconnectHooked = true;
+    }
+    lastDisconnectReason = 0;
+    failureText[0] = '\0';
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -119,10 +172,20 @@ bool wifiUp()
     }
     if (WiFi.status() != WL_CONNECTED)
     {
-        Serial.println("WiFi: connect timed out");
+        uint8_t reason = lastDisconnectReason;
+        const char *why = reason ? WiFi.STA.disconnectReasonName((wifi_err_reason_t)reason) : "no disconnect event";
+        Serial.printf("WiFi: connect to \"%s\" timed out after %lu ms: status %d, last disconnect reason %u (%s)\n",
+                      WIFI_SSID, (unsigned long)WIFI_CONNECT_TIMEOUT_MS, (int)WiFi.status(), reason, why);
+        int rssi = scanForSsid(WIFI_SSID);
+        if (rssi == 0)
+            snprintf(failureText, sizeof(failureText), "SSID not seen");
+        else
+            snprintf(failureText, sizeof(failureText), "%s %ddBm", reason ? why : "timeout", rssi);
         wifiDown();
         return false;
     }
+    Serial.printf("WiFi: connected in %lu ms, RSSI %d dBm, channel %d\n", (unsigned long)(millis() - start),
+                  WiFi.RSSI(), WiFi.channel());
     return true;
 }
 

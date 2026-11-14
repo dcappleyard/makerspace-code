@@ -132,7 +132,18 @@ The booth keeps a CSV log of the LiPo's voltage. A0 is read through the round di
 When the booth goes to sleep (30 s after the last tap, or immediately on the existing sleep path), the camera is already off and the screen still on. If any photos are pending, it:
 1. Brings WiFi up (the existing 15 s connect timeout).
 2. POSTs each pending photo, oldest first, to `SERVER_URL` + `/sources/photobooth/upload`. The source id is `UPLOAD_SOURCE` in `src/booth_config.h`. Headers are `X-Access-Token` = `UPLOAD_TOKEN` and `X-Filename` = the photo's name. It streams from the SD card, or from PSRAM for shots taken without a card.
-3. Shows "Uploading... n of N", then "Uploaded" / "Upload incomplete", or "Upload later / no WiFi".
+3. Shows "Uploading... n of N", then "Uploaded" / "Upload incomplete", or "Upload later / no WiFi: \<why\>".
+
+**When WiFi won't connect,** it scans for `WIFI_SSID` and reports why. This happens at boot and before an upload.
+- **On screen:** `<why>` is the driver's last disconnect reason plus the SSID's best RSSI, e.g. `AUTH_FAIL -61dBm`. If the scan can't find the network at all, it shows `SSID not seen`.
+- **Battery log:** the same text goes in as a `wifi_fail:...` row, which includes the voltage at the failure. It reaches the server with the next upload that gets through.
+- **Serial:** the full detail. This covers the status code, every AP broadcasting the SSID (RSSI, channel, BSSID, auth mode), or, if the SSID isn't seen, the first 10 networks the scan did find.
+
+How to read it:
+- **`SSID not seen`:** the network isn't on 2.4 GHz where the booth is, or it's on channel 12-13, or the antenna isn't making contact.
+- **`AUTH_FAIL`, `4WAY_HANDSHAKE_TIMEOUT` or `HANDSHAKE_TIMEOUT`:** check the password and the router's security mode. A WPA3-only network is a likely culprit.
+- **Weak RSSI (below about −80 dBm):** a signal or antenna problem.
+- **Fails only on battery:** power. The `wifi_fail` rows in the battery log show the voltage.
 
 - **Accepted photos:** a card photo the server accepted (stored or duplicate) moves to `/photos/uploaded/`. It stays on the card, just out of the way. RAM-only photos are dropped once uploaded.
 - **Retries:** anything not sent is retried at the next sleep. That covers the server being down or refusing (the uploader stops at the first failure) and the per-session budget running out. Constants: `UPLOAD_BUDGET_MS` (60 s per session) and `UPLOAD_HTTP_TIMEOUT_MS` (20 s per photo).
@@ -145,7 +156,9 @@ When the booth goes to sleep (30 s after the last tap, or immediately on the exi
 
 **Not yet confirmed on hardware:** the upload. That covers photos moving to `/photos/uploaded/`, a retry after the server was down, and no-SD RAM shots.
 
-**Built, not yet run on hardware (2026-11-09):** the Setup button on the prompt; the Setup screen (exposure −2..+2 defaulting to −1, Done, Reboot with confirm); the 60 s stay-awake after boot; and dropping the OV3660 `brightness +1` tweak (from Espressif's example), which was adding to the blown-out exposures.
+**Verified on hardware (2026-11-14):** the WiFi failure diagnostics: disconnect reason, SSID scan, and the `wifi_fail` battery-log row. They caught a mis-placed antenna: `AUTH_EXPIRE`, and a scan that found 0 networks. Also verified: Setup → Reboot gets the USB upload port up without pulling the battery.
+
+**Verified on hardware (2026-11-14, reported working):** the Setup button on the prompt; the Setup screen (exposure −2..+2 defaulting to −1, Done, Reboot with confirm); the 60 s stay-awake after boot; and dropping the OV3660 `brightness +1` tweak (from Espressif's example), which was adding to the blown-out exposures.
 
 **Built, not yet run on hardware (2026-10-31):**
 - the GUI rotated 180° (`DISPLAY_ROTATION = 3`)
