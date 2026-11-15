@@ -39,6 +39,7 @@ python3 play.py sequence                        # to the sculpture (wled.host)
 python3 play.py twinkle --also 127.0.0.1        # sculpture + preview together
 python3 play.py dna_strand -o motion=up -o bpm=60 -o rod=white -o colors=red,blue,gold,green
 python3 play.py dna_strand -o palette=classic -o sequence=GATTACA
+python3 play.py swarm -o size=0.05 -o speed=0.5 -o color=teal -o edge_color=purple
 ```
 
 To write a new effect, start the preview, pick the effect in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.

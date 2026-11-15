@@ -9,7 +9,7 @@ schedule:
   default_show: evening
   windows:
     - on: sunset - 15m
-      off: "23:00"
+      off: "20:38"
       show: evening
   brightness: 160              # WLED master brightness sent at on-time (0-255). Affects wled:<id> presets
                                # and WLED's fallback only; it does NOT dim DDP shows on this setup.
