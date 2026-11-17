@@ -124,6 +124,8 @@ function renderNowBar() {
   $("nbSep").hidden = !(s.on && e);
   $("nbLeft").textContent = s.on && e ? `${fmtDur(left)} left · next ${s.next || "—"}` : "";
   $("nbSkip").disabled = !s.on;
+  $("nbOff").hidden = !s.on || s.forced;
+  $("nbResume").hidden = !s.overridden;
 }
 async function pollStatus() {
   try {
@@ -143,6 +145,8 @@ async function cmd(name, body, errId) {
   } catch (e) { showMsg(errId, e.message); return null; }
 }
 $("nbSkip").onclick = () => cmd("skip", {}, "ctlErr");
+$("nbOff").onclick = () => cmd("off", {}, "ctlErr");
+$("nbResume").onclick = () => cmd("resume", {}, "ctlErr");
 
 // ------------------------------------------------------------ settings model
 function markDirty() {

@@ -42,6 +42,8 @@ log = logging.getLogger("runner")
 
 TICK = 0.25              # control loop period, s
 RETRY = 30.0             # retry interval for failed WLED/network actions, s
+OFF_FADE = 1.0           # at window off: fade the stream to black over this, s
+OFF_BLACK = 0.3          # ... then keep sending black this long, so the LEDs latch dark
 
 
 class Mixer:
@@ -55,14 +57,22 @@ class Mixer:
         self.fade_start, self.fade_s = 0.0, 0.0
         self._logged_error = None
         self.last = None             # last frame sent (bytes), for the dashboard's live view
+        self.out_start = None        # fade_out(): when it began, and how long it takes
+        self.out_s = 0.0
 
     def switch(self, player, fade_s=0.0):
         with self.lock:
             self.prev = self.cur if (player is not None and fade_s > 0) else None
             self.cur = player
             self.fade_start, self.fade_s = time.monotonic(), fade_s
+            self.out_start = None
             if player is None:
                 self.last = None
+
+    def fade_out(self, seconds):
+        """Fade whatever is playing to black, then keep sending black frames."""
+        with self.lock:
+            self.out_start, self.out_s = time.monotonic(), max(seconds, 1e-3)
 
     def set_scale(self, scale):
         with self.lock:
@@ -85,6 +95,12 @@ class Mixer:
                     x = np.frombuffer(f, np.uint8).astype(np.float32)
                     y = np.frombuffer(prev.frame(), np.uint8).astype(np.float32)
                     f = (y + (x - y) * a + 0.5).astype(np.uint8).tobytes()
+            if self.out_start is not None:
+                g = 1.0 - (time.monotonic() - self.out_start) / self.out_s
+                if g <= 0:
+                    f = bytes(len(f))
+                else:
+                    f = (np.frombuffer(f, np.uint8).astype(np.float32) * g + 0.5).astype(np.uint8).tobytes()
             self.last = f
             return f
 
@@ -171,6 +187,7 @@ class Runner:
         self.pos = -1
         self.entry = None
         self.entry_end = 0.0
+        self.played = False          # the current entry was started by the dashboard's Play
         self.pending = {}            # action -> (retry time, desc, state)
         self.pending_start = 0.0     # retry time after a failed window start
         self.next_reassert = 0.0
@@ -273,13 +290,20 @@ class Runner:
     def end_window(self):
         log.info("window off")
         self.show_override = None
+        # WLED doesn't redraw while it's in realtime mode, and once it's off it
+        # doesn't redraw either, so the LEDs would keep the last frame we sent.
+        # Fade the stream to black first so what they keep is dark.
+        if self.streamer is not None and self.mixer.cur is not None:
+            self.mixer.fade_out(OFF_FADE)
+            self.stopping.wait(OFF_FADE + OFF_BLACK)
         self.mixer.switch(None)
         self.stop_streaming()
         self.window = None
         self.entry = None
         self.pending.pop("on", None)
         self.pending.pop("preset", None)
-        self.api_call("off", "off", on=False)
+        # leave realtime mode now (not after its timeout), and switch off with no transition
+        self.api_call("off", "off", on=False, live=False, tt=0)
 
     def stop_streaming(self):
         if self.streamer:
@@ -292,6 +316,7 @@ class Runner:
     # ------------------------------------------------------------ rotation
     def next_entry(self, first=False):
         prev = self.entry
+        self.played = False
         for _ in range(len(self.rotation)):
             self.pos += 1
             if self.pos >= len(self.order):
@@ -460,7 +485,8 @@ class Runner:
             effects.Player(e.name, self.layout, options=e.options)
         log.info("dashboard: play %s for %g min", e, minutes)
         if self.window is None:
-            self.suppress_until = None
+            # Off (or switched off): on just for this. Keep any "off until"
+            # so the scheduled window doesn't come back when it ends.
             now = self.schedule.now()
             self.manual = Interval(now, now + dt.timedelta(minutes=minutes), self.show.name)
             self.start_window(self.manual)
@@ -470,6 +496,7 @@ class Runner:
             raise ValueError(f"{e} failed to start (see log)")
         self.entry = e
         self.entry_end = time.monotonic() + 60 * minutes
+        self.played = True
 
     def _play_show(self, name, minutes):
         if name not in self.shows:
@@ -477,7 +504,6 @@ class Runner:
         now = self.schedule.now()
         log.info("dashboard: play show %s%s", name, f" for {minutes:g} min" if minutes else "")
         if self.window is None:
-            self.suppress_until = None
             self.manual = Interval(now, now + dt.timedelta(minutes=float(minutes or 60)), name)
             return
         until = now + dt.timedelta(minutes=float(minutes)) if minutes else self.window.end
@@ -502,9 +528,11 @@ class Runner:
         log.info("dashboard: on for %g min (%s)", minutes, self.manual.show)
 
     def cmd_off(self):
+        """Off now, whatever is playing; the schedule takes over again at the
+        next window (or Back to schedule)."""
         if self.args.force_on:
             raise ValueError("runner was started with --force-on; stop it instead")
-        self.manual = None
+        self.manual = self.show_override = None
         win = self.schedule.active()
         if win:
             self.suppress_until = win.end
@@ -513,6 +541,8 @@ class Runner:
     def cmd_resume(self):
         """Drop manual on/off overrides and follow the schedule again."""
         self.manual = self.suppress_until = self.show_override = None
+        if self.played:              # cut a Play-now effect short; the show carries on
+            self.entry_end = 0.0
         log.info("dashboard: back to the schedule")
 
     def cmd_scale(self, value):
@@ -630,6 +660,10 @@ class Runner:
             "show_override": ({"show": self.show_override[0], "until": _iso(self.show_override[1])}
                               if self.show_override else None),
             "suppressed_until": _iso(self.suppress_until),
+            "played": self.played and self.window is not None,
+            # anything the dashboard changed that Back to schedule would undo
+            "overridden": bool(self.manual or self.suppress_until or self.show_override
+                               or (self.played and self.window is not None)),
             "next_window": {"start": _iso(nxt.start), "end": _iso(nxt.end), "show": nxt.show} if nxt else None,
             "sun": {k: _iso(sun[k]) for k in ("dawn", "sunrise", "sunset", "dusk")},
             "entry": entry,

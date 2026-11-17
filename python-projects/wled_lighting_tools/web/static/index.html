@@ -38,7 +38,7 @@
   .nowbar .show { font-weight: 600; }
   .nowbar .fx { overflow-wrap: anywhere; }
   .nowbar .left { color: var(--muted); font-size: 13px; }
-  .nowbar button { margin-left: auto; }
+  .nowbar .btns { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
   main { padding: 14px 0 90px; }
   .grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
@@ -139,7 +139,11 @@
   <div class="wrap nowbar" aria-live="polite">
     <span class="show" id="nbShow">—</span><span class="muted" id="nbSep">›</span><span class="fx" id="nbEffect"></span>
     <span class="left" id="nbLeft"></span>
-    <button class="small" id="nbSkip">Skip effect</button>
+    <span class="btns">
+      <button class="small" id="nbSkip">Skip effect</button>
+      <button class="small" id="nbResume" hidden title="Undo the dashboard's on / off / play changes and follow the schedule">Back to schedule</button>
+      <button class="small" id="nbOff" title="Stop the sculpture now; it comes back on at the next scheduled window">Turn off</button>
+    </span>
   </div>
 </header>
 
@@ -168,7 +172,7 @@
         <span class="muted">min</span>
       </div>
       <div class="row">
-        <button id="btnOff">Off until next window</button>
+        <button id="btnOff">Turn off (until next window)</button>
         <button id="btnResume" hidden>Back to schedule</button>
       </div>
       <div class="row">

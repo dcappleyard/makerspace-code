@@ -24,7 +24,7 @@
     if (s.wled.reachable === false && s.wled.error) add("WLED error", s.wled.error);
 
     $("btnOff").disabled = !s.on || s.forced;
-    $("btnResume").hidden = !(s.manual || s.suppressed_until || s.show_override);
+    $("btnResume").hidden = !s.overridden;
     if (document.activeElement !== $("scale")) { $("scale").value = s.scale; $("scaleVal").textContent = s.scale.toFixed(2); }
   }
   App.on("status", renderNow);
