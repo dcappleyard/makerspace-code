@@ -123,6 +123,8 @@
       if (!isWled && !effectByName(e.item)) sel.prepend(el("option", { value: e.item, selected: true }, `${e.item} (missing — not in this build; rebuild the image)`));
       const preset = el("input", { type: "number", min: "1", value: isWled ? e.item.slice(5) : "1", "aria-label": "preset id", hidden: !isWled, class: "preset" });
       const mins = el("input", { type: "number", min: "0.5", step: "0.5", value: fmtVal(e.minutes), placeholder: String(defMin), title: "minutes (blank = show default)", "aria-label": "minutes" });
+      const once = el("input", { type: "checkbox", checked: !!e.once, "aria-label": "once" });
+      const onceLbl = el("label", { class: "muted", title: "play only on the show's first pass, not when it repeats" }, once, " once");
       const up = el("button", { class: "small", title: "move up", disabled: i === 0 }, "↑");
       const down = el("button", { class: "small", title: "move down", disabled: i === sh.effects.length - 1 }, "↓");
       const rm = el("button", { class: "small", title: "remove", disabled: sh.effects.length < 2 }, "✕");
@@ -138,13 +140,14 @@
       sel.onchange = () => { e.item = sel.value === "__wled" ? "wled:" + (preset.value || "1") : sel.value; e.options = {}; renderEffects(); markDirty(); };
       preset.oninput = () => { e.item = "wled:" + preset.value; markDirty(); };
       mins.oninput = () => { e.minutes = mins.value === "" ? null : Number(mins.value); markDirty(); };
+      once.onchange = () => { e.once = once.checked; markDirty(); };
       up.onclick = () => { sh.effects.splice(i - 1, 0, sh.effects.splice(i, 1)[0]); renderEffects(); markDirty(); };
       down.onclick = () => { sh.effects.splice(i + 1, 0, sh.effects.splice(i, 1)[0]); renderEffects(); markDirty(); };
       rm.onclick = () => { sh.effects.splice(i, 1); renderEffects(); markDirty(); };
 
       ul.append(el("li", {},
         el("div", { class: "head" }, el("span", { class: "num" }, `${i + 1}`), sel, preset, mins,
-          el("span", { class: "muted" }, "min"), optBtn, up, down, rm),
+          el("span", { class: "muted" }, "min"), onceLbl, optBtn, up, down, rm),
         desc, optBox));
     });
     const total = sh.effects.reduce((a, e) => a + (e.minutes ?? defMin), 0);

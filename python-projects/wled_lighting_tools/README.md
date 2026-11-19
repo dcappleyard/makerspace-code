@@ -41,6 +41,10 @@ python3 play.py dna_strand -o motion=up -o bpm=60 -o rod=white -o colors=red,blu
 python3 play.py dna_strand -o palette=classic -o sequence=GATTACA
 python3 play.py swarm -o size=0.05 -o speed=0.5 -o color=teal -o edge_color=purple
 python3 play.py flowers -o grow_seconds=30 -o palette=iris        # or colors="white,white,yellow"
+python3 play.py snow -o wind=0.8 -o wind_direction=90 -o flake_size=8 -o intensity=0.3
+python3 play.py snow -o color="#d8e4ff" -o intensity=0.1          # fixed color instead of the rainbow
+python3 play.py sunset -o minutes=1 -o color=fire                # whole scene in a minute, to preview
+python3 play.py sunrise -o horizon=2 -o color="peach,rose,lavender,navy"
 ```
 
 To write a new effect, start the preview, pick the effect in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
@@ -72,7 +76,7 @@ python3 runner.py                          # normal scheduled operation (what th
 ```
 
 - **Shows:** a show is a named list of effects, defined in the `shows:` section of the program file (`morning`, `evening`, ...). Each window has an optional `show:`; `schedule.default_show` plays for windows without one, and for the dashboard's "Turn on". If back-to-back windows want different shows, the runner crossfades into the new show without turning off.
-- **Show entries:** an effect name, `wled:<preset id>`, or `{effect: name, minutes: N, options: {...}}` (the old `{show: name}` key is still read). For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
+- **Show entries:** an effect name, `wled:<preset id>`, or `{effect: name, minutes: N, options: {...}, once: true}` (the old `{show: name}` key is still read). `once: true` (the **once** box in the Show builder) plays the entry only on the show's first pass after the window starts (or after Play of the show); the rotation then repeats without it. With shuffle, once entries keep their place and only the others are shuffled; a show of only once entries holds the last one. The program's `evening` show starts with `{effect: sunset, minutes: 30, once: true}` in the `sunset - 15m` window, and the `morning` show (`sunrise - 15m` to `sunrise + 15m`) is `{effect: sunrise, minutes: 30, once: true}`, so the sun sets and rises on time. For a preset, DDP stops and the runner sends `{"live": false, "ps": id}`, so WLED runs its own effect for that slot.
 - **Per-show overrides:** a show can set `scale`, `minutes_each`, `shuffle` and `transition_seconds`. Anything it leaves out comes from the `schedule:` globals.
 - **Old configs:** a config with only `schedule.rotation` (no `shows:`), or with `schedule:`/`shows:` in the machine config and no program file, loads as one show named `evening`, which is the default. The dashboard's first save writes the new shape and drops `schedule.rotation`.
 - **Failures:** if WLED is unreachable, API calls are retried every 30 s and streaming carries on. An effect that errors keeps its last good frame. Invalid show entries are logged and skipped.

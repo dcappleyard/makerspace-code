@@ -8,7 +8,10 @@ schedule:
   # the on time means the next day (e.g. off: "01:00").
   default_show: evening
   windows:
-    - on: sunset - 15m
+    - on: sunrise - 15m          # sunrise effect: the sun comes up 15 min in, on time
+      off: sunrise + 15m
+      show: morning
+    - on: sunset - 15m           # sunset effect first: the sun goes down 15 min in, on time
       off: "20:38"
       show: evening
   brightness: 160              # WLED master brightness sent at on-time (0-255). Affects wled:<id> presets
@@ -16,14 +19,19 @@ schedule:
   scale: 0.64                  # brightness of DDP shows (0-1); the only dimmer for them
 
   # Rotation: show names from shows/, or wled:<preset id> to hand over to a
-  # WLED preset (DDP stops while it runs). Per-entry minutes override minutes_each.
+  # WLED preset (DDP stops while it runs). Per-entry minutes override minutes_each;
+  # once: true plays an entry on the show's first pass only, not when it repeats.
   minutes_each: 10
   shuffle: false
   transition_seconds: 2        # crossfade between DDP shows (0 = hard cut)
   reassert_on: false           # every minute, turn WLED back on if something turned it off mid-window
 shows:
+  morning:
+    effects:
+      - {effect: sunrise, minutes: 30, once: true}
   evening:
     effects:
+      - {effect: sunset, minutes: 30, once: true}
       - rainbow_helix
       - sequence
       - ring_spin

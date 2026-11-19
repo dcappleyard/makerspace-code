@@ -58,6 +58,8 @@ NAMED_COLORS = {
     "yellow": "#ffe000", "lime": "#80ff00", "green": "#00ff20", "teal": "#00c080",
     "cyan": "#00e0ff", "sky": "#0090ff", "blue": "#0020ff", "indigo": "#3000ff",
     "purple": "#8000ff", "violet": "#c000ff", "magenta": "#ff00c0", "pink": "#ff4080",
+    "navy": "#081450", "coral": "#ff5040", "peach": "#ffa060", "rose": "#ff3060",
+    "lavender": "#b070e0", "plum": "#602070", "crimson": "#c00020",
     "white": "#ffffff", "warmwhite": "#ffb060", "black": "#000000", "off": "#000000",
 }
 

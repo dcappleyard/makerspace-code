@@ -5,6 +5,7 @@ Config (see config.example.yaml):
     shows:
       evening:
         effects:                  # effect names, wled:<id>, or {effect: name, minutes: N, options: {...}}
+          - {effect: sunset, minutes: 30, once: true}   # once: first pass only (see below)
           - rainbow_helix
           - {effect: dna_strand, minutes: 5, options: {motion: up}}
           - wled:1
@@ -12,6 +13,12 @@ Config (see config.example.yaml):
         minutes_each: 10
         shuffle: false
         transition_seconds: 2
+
+An entry with `once: true` plays only on the show's first pass: from the
+start of a window (or a Play of the show), the rotation runs through every
+entry, and after that it repeats without the once entries. With shuffle on,
+once entries keep their place in the list and only the others are shuffled.
+A show made only of once entries holds its last one.
 
 A config with no shows: but a schedule.rotation: (the pre-shows format) loads
 as one show, "evening". Entries may also say {show: name} (the old key) for an
@@ -36,6 +43,7 @@ class Entry:
     name: str             # effect name, or preset id as str
     minutes: float
     options: dict = None  # effect options (entry's options:)
+    once: bool = False    # only on the show's first pass
 
     def __str__(self):
         return self.name if self.kind == "effect" else f"wled:{self.name}"
@@ -64,6 +72,16 @@ def entry_item(item):
     return str(item).strip(), minutes, options
 
 
+def entry_once(item):
+    """A raw config entry's once: flag."""
+    if not isinstance(item, dict):
+        return False
+    v = item.get("once", False)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
 def parse_entries(items, default_minutes, where="rotation", strict=False):
     """Config entries -> [Entry]. Bad entries are logged and skipped, or with
     strict=True raise ValueError listing them all."""
@@ -83,9 +101,9 @@ def parse_entries(items, default_minutes, where="rotation", strict=False):
             if not pid.isdigit():
                 errors.append(f"{where} #{n}: bad preset {item!r} (use wled:<number>)")
                 continue
-            out.append(Entry("preset", pid, minutes))
+            out.append(Entry("preset", pid, minutes, once=entry_once(raw)))
         elif item in known:
-            out.append(Entry("effect", item, minutes, options or None))
+            out.append(Entry("effect", item, minutes, options or None, once=entry_once(raw)))
         else:
             errors.append(f"{where} #{n}: no effect {item!r} (have: {', '.join(sorted(known))})")
     if errors:

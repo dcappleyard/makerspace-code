@@ -185,6 +185,7 @@ class Runner:
         self.window = None           # (start, end) while on
         self.order = []
         self.pos = -1
+        self.passes = 0              # times the current show's rotation has started (once: entries only on the 1st)
         self.entry = None
         self.entry_end = 0.0
         self.played = False          # the current entry was started by the dashboard's Play
@@ -228,7 +229,7 @@ class Runner:
         if not quiet:
             log.info("show: %s (%s)", sh.name, ", ".join(map(str, sh.entries)))
         self.show = sh
-        self.order, self.pos = [], -1
+        self.order, self.pos, self.passes = [], -1, 0
         self.scale, self.fade_s = sh.scale, sh.fade_s
         self.mixer.set_scale(sh.scale)
 
@@ -314,15 +315,32 @@ class Runner:
             self.fanout = None
 
     # ------------------------------------------------------------ rotation
+    def build_order(self, sh, first_pass):
+        """One pass of a show's rotation. After the first pass, once: entries
+        are left out. Shuffle moves only the others; once entries keep their place."""
+        ents = [e for e in sh.entries if first_pass or not e.once]
+        if not sh.shuffle:
+            return ents
+        free = [e for e in ents if not e.once]
+        random.shuffle(free)
+        return [e if e.once else free.pop(0) for e in ents]
+
     def next_entry(self, first=False):
         prev = self.entry
         self.played = False
         for _ in range(len(self.rotation)):
             self.pos += 1
             if self.pos >= len(self.order):
-                self.order = list(self.rotation)
+                self.passes += 1
+                self.order = self.build_order(self.show, self.passes == 1)
+                if not self.order:
+                    # only once entries, all played: hold the last one
+                    if prev is not None:
+                        self.entry_end = time.monotonic() + 60 * prev.minutes
+                        self.pos = -1
+                        return
+                    self.order = list(self.rotation)
                 if self.show.shuffle:
-                    random.shuffle(self.order)
                     if prev and len(self.order) > 1 and self.order[0] == prev:
                         self.order.append(self.order.pop(0))   # don't repeat across cycles
                 self.pos = 0
@@ -567,9 +585,7 @@ class Runner:
             sh = self.shows[cur_show]
             self.show, self.scale, self.fade_s = sh, sh.scale, sh.fade_s
             self.mixer.set_scale(sh.scale)
-            self.order = list(sh.entries)
-            if sh.shuffle:
-                random.shuffle(self.order)
+            self.order = self.build_order(sh, self.passes <= 1)
             self.pos = -1
             if cur is not None:
                 same = [i for i, e in enumerate(self.order)
@@ -632,7 +648,10 @@ class Runner:
             return None
         if self.pos + 1 < len(self.order):
             return str(self.order[self.pos + 1])
-        return "(shuffled)" if self.show.shuffle else str(self.rotation[0])
+        rest = [e for e in self.rotation if not e.once]
+        if not rest:
+            return str(self.entry) if self.entry else None
+        return "(shuffled)" if self.show.shuffle else str(rest[0])
 
     def update_status(self):
         now = self.schedule.now()

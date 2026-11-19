@@ -66,7 +66,7 @@ def _num(v):
 # ------------------------------------------------------------------ read
 def _norm_entry(raw):
     item, minutes, options = shows.entry_item(raw)
-    return {"item": item, "minutes": minutes, "options": dict(options or {})}
+    return {"item": item, "minutes": minutes, "options": dict(options or {}), "once": shows.entry_once(raw)}
 
 
 def read_settings(path):
@@ -116,13 +116,16 @@ def _check_ranges(errors, where, d):
 def _entry_out(e):
     """Validated entry -> what goes in the config: a bare name, wled:<id>, or a map."""
     item, minutes, options = e["item"], e.get("minutes"), e.get("options") or {}
-    if minutes in ("", None) and not options:
+    once = shows.entry_once(e)
+    if minutes in ("", None) and not options and not once:
         return item
     out = {"wled": int(item[5:])} if item.startswith("wled:") else {"effect": item}
     if minutes not in ("", None):
         out["minutes"] = _num(float(minutes))
     if options and not item.startswith("wled:"):
         out["options"] = dict(options)
+    if once:
+        out["once"] = True
     return out
 
 
@@ -161,7 +164,7 @@ def validate(settings, base_cfg, layout):
                 except Exception as ex:
                     errors.append(f"show {name} #{n} ({item}): {ex}")
                     continue
-            items.append({"item": item, "minutes": e.get("minutes"), "options": opts})
+            items.append({"item": item, "minutes": e.get("minutes"), "options": opts, "once": e.get("once")})
         out["effects"] = [_entry_out(e) for e in items]
         try:
             shows.parse_entries(out["effects"], 10, where=f"show {name}", strict=True)
