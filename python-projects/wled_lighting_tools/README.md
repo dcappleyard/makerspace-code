@@ -45,6 +45,7 @@ python3 play.py snow -o wind=0.8 -o wind_direction=90 -o flake_size=8 -o intensi
 python3 play.py snow -o color="#d8e4ff" -o intensity=0.1          # fixed color instead of the rainbow
 python3 play.py sunset -o minutes=1 -o color=fire                # whole scene in a minute, to preview
 python3 play.py sunrise -o horizon=2 -o color="peach,rose,lavender,navy"
+python3 play.py sandworm -o track=center -o down=3to5 -o colors="gold,orange,crimson" -o speed=6
 ```
 
 To write a new effect, start the preview, pick the effect in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.

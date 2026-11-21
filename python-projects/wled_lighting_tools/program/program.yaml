@@ -37,4 +37,4 @@ shows:
       - ring_spin
       - strand_flow
       - firework
-      - {effect: twinkle, minutes: 15}
+      - {effect: twinkle, minutes: 10}
