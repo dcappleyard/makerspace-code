@@ -66,6 +66,26 @@ devices:
       gamma: 1.0
       lift: 0
 
+  # The battery-powered EE04 frame with the 4.26" 800x480 B/W panel
+  # (esp32-projects/xiao_s3_ee04_pullframe). Its secrets.h holds the same token.
+  - id: desk_bw
+    name: Desk B/W
+    protocol: esp32_pull
+    pipeline: ee04_bw1
+    width: 800                     # 480 x 800 + output_rotation 90 for portrait
+    height: 480
+    output_rotation: 0
+    token: CHANGE_ME_TOKEN_3
+    image_secret: CHANGE_ME_IMAGE_SECRET_3
+    battery_monitor: low           # not "always": the % would change the image every wake
+    captions: none                 # overlay_bottom works too; there's no white band
+    options:
+      fit: cover                   # cover (fill, crop at the focal point) or letterbox
+    interval_minutes: 240          # fewer wakes = longer battery life
+    wake_hours: ["07:00", "22:00"]
+    tuning:
+      contrast: 1.15
+
 # Folder sources: photos that arrive in a folder on the server rather than
 # through the web upload -- here, the photobooth camera
 # (esp32-projects/xiao_s3_sense_photobooth). Each gets its own tab under Sources

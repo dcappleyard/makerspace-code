@@ -165,8 +165,22 @@ The UI previews decode the `.bin` back to a PNG.
 - **`GET /esp32/v1/pull`** (`X-Access-Token` header): returns JSON with a status of `show`, `keep`, `none` or `error`. A `show` includes `image_url`, `image_bytes`, `sha256` and `name`. Every response includes `next_check_s` and `next_check_at`.
 - **`keep`:** the frame already shows the right image (it reports `current=<name>`), so it skips both the download and the panel refresh.
 - **`GET /esp32/v1/signal`:** confirms the display after the panel refresh.
+- **Battery (optional):** a battery frame adds `battery=<percent>` and `battery_mv=<millivolts>` to the pull. The percent feeds the same `battery_monitor` overlay as the Bloomin8. Both readings are recorded in the pull's log event.
 
 The schedule blocks and log are the same as for the Bloomin8. ESP32 frames use the wake offset and the 60-min early-wake rule, not the Bloomin8's adaptive clock.
+
+## EE04 4.26" frame (`esp32_pull` + `ee04_bw1`)
+This serves the battery-powered EE04 frame with the 4.26" 800×480 black/white panel; its firmware is in `esp32-projects/xiao_s3_ee04_pullframe/`. It uses the same `esp32_pull` protocol as the EE03, with battery readings.
+
+**The `ee04_bw1` pipeline:**
+1. Fits the photo to the full 800×480 panel. `options.fit` is `cover` (default: fill, cropping around the focal point) or `letterbox` (whole photo, white bars).
+2. Tunes it (the default contrast is 1.15, which helps photos survive 1-bit) and draws the caption (`overlay_bottom`) and battery overlay.
+3. Dithers to pure black/white (Floyd–Steinberg).
+4. Packs 1 bit per pixel into the exact 48,000-byte `.bin` the firmware copies into its panel buffer: rows of 100 bytes, MSB = leftmost pixel, bit 1 = white.
+
+For portrait mounting, set `width: 480`, `height: 800` and `output_rotation: 90` (or 270).
+
+Use `battery_monitor: low` (or `none`), not `always`. The battery percent is part of the image's cache key while an overlay is drawn, so with `always` every new reading means a new image name, and the frame downloads and refreshes on every wake instead of getting `keep`.
 
 ## Tuning
 These parameters are set per device in `devices.yaml` → `tuning` and can be overridden per photo. Per-photo tuning is global to the photo; there's no per-frame or per-playlist photo tuning. The pipeline applies them in this order:

@@ -6,8 +6,9 @@ PlatformIO projects targeting ESP32 boards, using the Arduino framework. Contras
 
 Each subdirectory is a **fully self-contained PlatformIO project** with its own `platformio.ini`, `src/`, `include/`, `lib/`, `test/`, and `.gitignore` (covering `.pio/` build output and editor/OS cruft). New boards or sketches should follow the same per-project structure — run `pio project init` inside a new subdirectory rather than hand-rolling the layout.
 
-Current target hardware, both via the `platform-seeedboards` platform:
+Current target hardware, all via the `platform-seeedboards` platform:
 - **Seeed XIAO ESP32-S3 Plus** in the EE03 e-paper kit. Used by the e-ink projects, which pull in the `Seeed_GFX` library through `lib_deps` GitHub URLs; see `ee03-text-test/platformio.ini` for the pattern.
+- **XIAO ePaper Display Board EE04** (also an ESP32-S3 Plus) with a 4.26" 800×480 B/W panel. Used by `xiao_s3_ee04_pullframe/` (battery, deep sleep between pulls; stays awake 2 min after a cold boot and while a USB host is attached, so uploads work normally); `Seeed_GFX` combo 506 + `USE_XIAO_EPAPER_DISPLAY_BOARD_EE04` in `lib/driver/driver.h`.
 - **XIAO ESP32-S3 Sense** (camera + microSD). Used by `xiao_s3_sense_webcam/` and `xiao_s3_sense_photobooth/`. The webcam is the pattern for camera projects: `esp32-camera` from the core, plus `esp_http_server` so a stream doesn't block the API.
 
 `hardware_info.md` is a running informal notes file about the physical hardware in use (displays, boards, part links). Keep it updated when you add a new board or peripheral — it's the only place hardware context is recorded outside code comments.

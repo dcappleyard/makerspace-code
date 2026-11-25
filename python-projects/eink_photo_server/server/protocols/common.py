@@ -73,7 +73,7 @@ class Pull:
 
 def run_pull(request: Request, device, now: datetime, *, scheduled_for: datetime | None,
              battery: int | None = None, hw_device_id: str | None = None,
-             pull_id: str | None = None) -> Pull:
+             pull_id: str | None = None, battery_mv: int | None = None) -> Pull:
     """Choose what this frame shows now and when it wakes next; prepare the
     image; record the pull, state and log event. `scheduled_for` is the wake
     time the frame says it was given (for drift and early-wake handling)."""
@@ -118,6 +118,7 @@ def run_pull(request: Request, device, now: datetime, *, scheduled_for: datetime
         p.photo = db.photo(conn, photo_id) if photo_id else None
     p.event = dict(pull_id=p.pull_id, cron_time=schedule.iso_z(scheduled_for) if scheduled_for else None,
                    drift_s=drift_s, scheduled_by_server=ours, battery=battery, reason=p.reason,
+                   **({"battery_mv": battery_mv} if battery_mv is not None else {}),
                    effective_at=schedule.iso_z(at), next_target=schedule.iso_z(p.target),
                    next_cron_sent=p.next_cron, offset_s=offset, **clock)
 

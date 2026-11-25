@@ -1,10 +1,13 @@
-"""Pull protocol for the DIY ESP32 frames (esp32-projects/xiao_s3_ee03_pull_frame).
+"""Pull protocol for the DIY ESP32 frames (esp32-projects/xiao_s3_ee03_pull_frame,
+esp32-projects/xiao_s3_ee04_pullframe).
 
 Frame -> GET /esp32/v1/pull    X-Access-Token header; query:
            device_id      the board's id (recorded for reference)
            scheduled_for  the next_check_at it was given last time (ISO UTC), if any
            current        the image name it's showing now, if any
            reason         timer | boot | manual | retry
+           battery        battery %, if the frame has one (optional)
+           battery_mv     battery voltage in mV, for the log (optional)
          <- 200 JSON, always:
            {"status": "show" | "keep" | "none" | "error",
             "pull_id", "next_check_s", "next_check_at",
@@ -29,6 +32,13 @@ router = APIRouter()
 PROTOCOL = "esp32_pull"
 
 
+def _int(v: str | None) -> int | None:
+    try:
+        return int(v) if v not in (None, "") else None
+    except ValueError:
+        return None
+
+
 def _json(status: str, **fields) -> JSONResponse:
     return JSONResponse({"status": status, **fields})
 
@@ -46,6 +56,7 @@ def pull(request: Request):
         return _json("error", message="unauthorized", next_check_s=300)
 
     p = common.run_pull(request, device, now, scheduled_for=schedule.parse_iso(q.get("scheduled_for")),
+                        battery=_int(q.get("battery")), battery_mv=_int(q.get("battery_mv")),
                         hw_device_id=q.get("device_id"))
     timing = {"pull_id": p.pull_id, "next_check_s": int((p.sent - now).total_seconds()),
               "next_check_at": p.next_cron}

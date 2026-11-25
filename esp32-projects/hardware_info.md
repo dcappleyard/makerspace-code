@@ -21,6 +21,34 @@ A specific modified unit — the stock EE03 board above with a microSD card adde
 - Status: working. The suspected CLK/3V3 solder short was ruled out (multimeter resistance/polarity-swap testing showed diode-signature behavior, not a real short). The actual root cause of the initial SD connect failures was the Adafruit breakout's DI/DO pads being wired instead of SI/SO (SPI mode) — fixed. `eink_sd_test/` runs as a continuous strain-relief monitor (15s periodic SD re-check + e-ink status refresh); `panorama_photo_frame_w_counter/` is the first project to actually *use* this SD card for storage (image + `.xml` pairs in `/pictures/`, `frame_config.xml`, `counter_track.txt`).
 - SPI host note (verified during `eink_sd_test` bring-up): the SD card runs on `SPIClass(FSPI)` → **SPI2_HOST**, while the EE03 panel's Seeed_GFX/TFT_eSPI driver runs on **SPI3_HOST** — genuinely separate SPI peripherals, not just different CS lines on one bus, so the two never contend even when driven back-to-back.
 
+## XIAO ePaper Display Board EE04 — 4.26" monochrome ePaper display
+
+- Board: Seeed **XIAO ePaper Display Board EE04**, which ships with a XIAO ESP32-S3 **Plus** (same module family as the EE03 above). Product page: https://www.seeedstudio.com/XIAO-ePaper-Display-Board-EE04-p-6560.html. Wiki: https://wiki.seeedstudio.com/epaper_ee04/
+  - Two FPC connectors: 24-pin and 50-pin (0.5 mm pitch). A **jumper cap selects which one is live**; for the 4.26" panel it must be on **24 Pin**. Wrong position = blank or garbled panel.
+  - Buttons (active LOW): KEY0 = GPIO2, KEY1 = GPIO3, KEY2 = GPIO5, plus RESET.
+  - Battery: JST 2.0 mm LiPo connector, power switch, onboard charger (USB-C).
+  - Battery voltage: A0 / GPIO1, gated by ADC_ENABLE = GPIO6 (drive HIGH before reading). Seeed's sample: `V = adc / 4096.0 * 7.16`.
+  - No SD card on the board.
+- Display: Seeed **4.26" Monochrome SPI ePaper Display** (SKU 114993631), https://www.seeedstudio.com/4-26-Monochrome-SPI-ePaper-Display-p-6398.html
+  - 800×480, black/white only (no grayscale), SSD1677-compatible driver (Seeed lists "SE8350 (SSD1677)"), 24-pin FPC, 3.3 V.
+- Library: `Seeed_GFX` with `BOARD_SCREEN_COMBO 506` (`Setup506_Seeed_XIAO_EPaper_4inch26.h`) plus `USE_XIAO_EPAPER_DISPLAY_BOARD_EE04` in `lib/driver/driver.h`. That pulls the EE04 pin map from `EPaper_Board_Pins_Setups.h`:
+
+  | Signal | GPIO (XIAO pin) |
+  |---|---|
+  | SCLK | 7 (D8) |
+  | MOSI | 9 (D10) |
+  | CS | 44 (D7) |
+  | DC | 10 (D16) |
+  | BUSY | 4 (D3) |
+  | RST | 38 (D11) |
+  | Panel power enable | 43 (D6), driven HIGH by the SSD1677 init |
+
+  - Seeed's own wiki points Arduino users at the newer `Seeed_GFX2` library instead; this repo sticks with `Seeed_GFX`, which already has the EE04 + 4.26" setup.
+- Use: monochrome, so it's a text/line-art/dashboard panel more than a photo frame. Planned as another pull client of `python-projects/eink_photo_server/`.
+- Used by: `xiao_s3_ee04_pullframe/`, a battery-powered, deep-sleeping pull client of the eink_photo_server (`ee04_bw1` pipeline). Wiring, pin map and orientation were verified on hardware with its first version's test pattern (2026-11-25).
+- Deep sleep: KEY0-2 (GPIO 2/3/5) and the battery pins (GPIO 1/6) are all RTC-capable (GPIO 0-21). The panel enable (GPIO43) isn't, but a digital pad hold (`gpio_hold_en` + `gpio_deep_sleep_hold_en`) keeps it LOW through sleep. Sleep current hasn't been measured yet.
+- No RTC: neither Seeed's product page nor the wiki lists an RTC chip, coin cell or other I2C device. Time comes from NTP, or from the server.
+
 ## XIAO ESP32-S3 Sense — camera web cam
 
 - Board: Seeed XIAO ESP32-S3 **Sense**, the first actual Sense-variant unit in this repo. The EE03 above is a Plus.
