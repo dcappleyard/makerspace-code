@@ -53,7 +53,11 @@ constexpr bool STAY_AWAKE_ON_USB_HOST = true;
 // -----------------------------------------------------------------------------
 // WiFi
 // -----------------------------------------------------------------------------
-constexpr const char *HOSTNAME = "ee04-frame";
+// Per frame, from the PlatformIO env (platformio.ini).
+#ifndef FRAME_HOSTNAME
+#error "Build with -e frame1 or -e frame2 (see platformio.ini)"
+#endif
+constexpr const char *HOSTNAME = FRAME_HOSTNAME;
 // First try the AP/channel remembered from the last wake (skips the scan),
 // then a normal connect.
 constexpr uint32_t WIFI_FAST_TIMEOUT_MS = 5000;

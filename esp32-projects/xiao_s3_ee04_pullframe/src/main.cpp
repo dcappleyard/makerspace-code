@@ -141,8 +141,9 @@ void setup()
         for (int i = 0; i < 20 && !Serial; i++)
             delay(100);
     }
-    Serial.printf("\nxiao_s3_ee04_pullframe: %s (wake #%lu), current \"%s\"\n",
-                  timerWake ? "timer wake" : "cold boot", (unsigned long)rtc.wakes, rtc.current);
+    Serial.printf("\nxiao_s3_ee04_pullframe [%s, MAC %s]: %s (wake #%lu), current \"%s\"\n", HOSTNAME,
+                  WiFi.macAddress().c_str(), timerWake ? "timer wake" : "cold boot", (unsigned long)rtc.wakes,
+                  rtc.current);
 
     sleepOrWait(runCycle(timerWake ? "timer" : "boot"));
 }

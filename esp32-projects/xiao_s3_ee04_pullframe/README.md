@@ -8,6 +8,8 @@ A battery-powered **pull client of the eink_photo_server**
 
 For why it works this way and what was left out compared with the EE03 frame, see [DESIGN.md](DESIGN.md).
 
+**Two frames, one source tree.** There are two of these boards. `platformio.ini` has an environment per board, `frame1` and `frame2`, which differ only in `FRAME_SLOT` (which picks that frame's token in `secrets.h`) and the hostname. Always name the board you're flashing with `-e`. Label the boards physically; the serial log's first line shows the env's hostname and the board's MAC, and the server logs the MAC on the frame's tab.
+
 ## Hardware setup
 
 1. Seat the panel's ribbon in the EE04's **24-pin** FPC connector, and set the FPC jumper to **24 Pin**.
@@ -15,16 +17,17 @@ For why it works this way and what was left out compared with the EE03 frame, se
 
 ## Setup
 
-1. **Add the frame on the server.** In `data/devices.yaml`, add an entry with `protocol: esp32_pull`, `pipeline: ee04_bw1`, `width: 800` and `height: 480`. `devices.example.yaml` has a `desk_bw` example. Use `battery_monitor: low` or `none`, not `always` (the server README explains why). Give it its own random `token` and `image_secret`, then click **Reload devices.yaml**.
+1. **Add each frame on the server.** In `data/devices.yaml`, add one entry per frame with `protocol: esp32_pull`, `pipeline: ee04_bw1`, `width: 800` and `height: 480`. `devices.example.yaml` has a `desk_bw` example. Use `battery_monitor: low` or `none`, not `always` (the server README explains why). Give each its own random `token` and `image_secret` (`python3 -c "import secrets; print(secrets.token_urlsafe(24))"`), then click **Reload devices.yaml**.
 2. **Fill in `include/secrets.h`.** It's gitignored, and a copy of `secrets.h.example` with placeholders is already in place. Set:
    - `WIFI_SSID` and `WIFI_PASSWORD`
    - `SERVER_URL`, e.g. `http://192.168.30.10:8080`
-   - `DEVICE_TOKEN`: the server entry's `token`
-3. **Flash and watch:**
+   - the `DEVICE_TOKEN` under `FRAME_SLOT == 1` and `== 2`: each frame's server `token`
+3. **Flash and watch**, naming the board:
    ```
-   pio run -t upload
-   pio device monitor
+   pio run -e frame1 -t upload
+   pio device monitor -e frame1
    ```
+   and `-e frame2` for the other. A bare `pio run -t upload` flashes `frame1` (the default env).
    Within a few seconds the frame pulls, downloads and draws. The server's frame tab logs the pull, with the battery reading, and the confirmation.
 
 ## How it runs

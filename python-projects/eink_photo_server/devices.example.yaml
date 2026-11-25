@@ -68,6 +68,8 @@ devices:
 
   # The battery-powered EE04 frame with the 4.26" 800x480 B/W panel
   # (esp32-projects/xiao_s3_ee04_pullframe). Its secrets.h holds the same token.
+  # One entry per EE04 board, each with its own token and image_secret; the
+  # firmware's `-e frame1` / `-e frame2` env picks which token a board gets.
   - id: desk_bw
     name: Desk B/W
     protocol: esp32_pull
