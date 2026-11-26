@@ -42,6 +42,26 @@ class Pipeline:
         at this size."""
         return device.width, device.height
 
+    # -- dashboards (server/dashboards/): drawn natively, not converted ----------
+    def dashboard_theme(self, device):
+        """The draw.Theme of inks this panel shows exactly."""
+        raise NotImplementedError(f"{self.name} has no dashboard theme")
+
+    def surface(self, device):
+        """Where a dashboard is drawn: the content area, with this panel's theme."""
+        from ..dashboards.draw import Surface
+        w, h = self.content_size(device)
+        return Surface(w, h, self.dashboard_theme(device))
+
+    def encode_rendered(self, img: Image.Image, device) -> bytes:
+        """A dashboard drawn on surface() -> panel bytes. No tuning, cropping or
+        error-diffusion dithering: the pixels are already panel inks."""
+        raise NotImplementedError(f"{self.name} can't show dashboards")
+
+    def rendered_preview(self, img: Image.Image, device) -> Image.Image:
+        """What the panel will show for a rendered dashboard, as mounted."""
+        return img
+
 
 _SRGB = ImageCms.createProfile("sRGB")
 

@@ -5,8 +5,11 @@ Raw sources hold photos (each photo belongs to exactly one):
   testcards   tuning cards saved from the Test card page
   <folder id> a folder under DATA_DIR from devices.yaml `sources:`, e.g. the
               photobooth repository -- filled by HTTP upload and/or dropped files
+  dashboards  data dashboards (server/dashboards/), e.g. weather -- one item each,
+              rendered per frame at pull time rather than loaded from a file
 Curated sources:
-  playlist:<id>  an ordered selection of photos from any raw source
+  playlist:<id>   an ordered selection of photos from any raw source
+  dashboard:<id>  just that one dashboard
 
 A schedule block names a source key (one of the above) and a selection.
 """
@@ -25,7 +28,7 @@ from . import db, photos
 log = logging.getLogger(__name__)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
-BUILTIN = {"library": "Library", "testcards": "Test cards"}
+BUILTIN = {"library": "Library", "testcards": "Test cards", "dashboards": "Dashboards"}
 
 
 @dataclass(frozen=True)
@@ -37,7 +40,7 @@ class Item:
 def raw_sources() -> list[tuple[str, str]]:
     """(key, name) for every raw source, in tab order."""
     return ([("library", "Library")] + [(s.id, s.name) for s in cfg.config.sources.values()]
-            + [("testcards", "Test cards")])
+            + [("testcards", "Test cards"), ("dashboards", "Dashboards")])
 
 
 def is_raw(key: str) -> bool:
@@ -49,7 +52,16 @@ def playlist_id(key: str) -> int | None:
     return int(m[1]) if m else None
 
 
+def dashboard_id(key: str) -> int | None:
+    m = re.fullmatch(r"dashboard:(\d+)", key or "")
+    return int(m[1]) if m else None
+
+
 def label(conn, key: str) -> str:
+    did = dashboard_id(key)
+    if did is not None:
+        d = db.dashboard(conn, did) if conn else None
+        return f"Dashboard: {d['name']}" if d else "Dashboard (deleted)"
     pid = playlist_id(key)
     if pid is not None:
         pl = db.playlist(conn, pid)
@@ -61,9 +73,11 @@ def label(conn, key: str) -> str:
 
 
 def choices(conn) -> list[tuple[str, str]]:
-    """All sources a block can use: raw sources, then playlists."""
+    """All sources a block can use: raw sources, then playlists, then dashboards."""
     pls = conn.execute("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE, id").fetchall()
-    return raw_sources() + [(f"playlist:{p['id']}", f"Playlist: {p['name']}") for p in pls]
+    dbs = conn.execute("SELECT id, name FROM dashboards ORDER BY name COLLATE NOCASE, id").fetchall()
+    return (raw_sources() + [(f"playlist:{p['id']}", f"Playlist: {p['name']}") for p in pls]
+            + [(f"dashboard:{d['id']}", f"Dashboard: {d['name']}") for d in dbs])
 
 
 def items(conn, key: str) -> list[Item]:
@@ -71,6 +85,10 @@ def items(conn, key: str) -> list[Item]:
     pid = playlist_id(key)
     if pid is not None:
         return [Item(r["id"], r["photo_id"]) for r in db.playlist_items(conn, pid)]
+    did = dashboard_id(key)
+    if did is not None:
+        rows = conn.execute("SELECT id FROM photos WHERE kind = 'dashboard' AND dashboard_id = ?", (did,)).fetchall()
+        return [Item(r["id"], r["id"]) for r in rows]
     rows = conn.execute("SELECT id FROM photos WHERE source = ? ORDER BY id", (key,)).fetchall()
     return [Item(r["id"], r["id"]) for r in rows]
 

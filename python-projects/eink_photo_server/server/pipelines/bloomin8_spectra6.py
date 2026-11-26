@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from PIL import Image
 
+from ..dashboards.draw import Fill, Theme
 from . import register
 from .base import (Pipeline, apply_tuning, cover_crop, draw_battery, draw_caption, encode_jpeg,
                    resize_lanczos, rotate_cw)
@@ -25,6 +26,9 @@ def _palette_image() -> Image.Image:
     flat = [c for rgb in SPECTRA6 for c in rgb]
     pal.putpalette(flat + flat[:3] * (256 - len(SPECTRA6)))
     return pal
+
+
+_K, _W, _R, _Y, _B, _GR = SPECTRA6
 
 
 @register
@@ -49,6 +53,38 @@ class Bloomin8Spectra6(Pipeline):
             img = draw_battery(img, params["battery_overlay"], self.color)
         img = rotate_cw(img, device.output_rotation)
         return encode_jpeg(img, int(params["quality"]))
+
+    # Dashboards: flat Spectra 6 colours only (the frame dithers anything else,
+    # which would speckle text and tiles), drawn without antialiasing so edges
+    # don't snap to stray inks.
+    THEME = Theme(
+        name="spectra6", antialias=False, muted=_B, rule=_K, hi=_R, lo=_B, bar_bg=_K, min_font=14,
+        fills={
+            "clear": Fill(bg=_Y, border=None, halo=None),
+            "partly": Fill(bg=_W, border=_Y, border_w=4),
+            "cloudy": Fill(),
+            "fog": Fill(pattern="fog", pattern_ink=_K),
+            "wind": Fill(bg=_GR, border=None, icon=_W, halo=None),
+            "rain": Fill(bg=_B, border=None, icon=_W, halo=None),
+            "mix": Fill(bg=_B, border=None, icon=_W, halo=None, pattern="hatch", pattern_ink=_W),
+            "snow": Fill(bg=_W, border=_B, border_w=3, icon=_B),
+            "storm": Fill(bg=_K, border=None, icon=_Y, halo=None),
+            "hot": Fill(bg=_R, border=None, icon=_W, halo=None),
+            "cold": Fill(bg=_W, border=_B, border_w=3, icon=_B),
+        })
+
+    def dashboard_theme(self, device):
+        return self.THEME
+
+    def _snap(self, img):
+        """Every pixel onto the nearest ink (antialiased edges included), no dither."""
+        return img.convert("RGB").quantize(palette=_palette_image(), dither=Image.Dither.NONE).convert("RGB")
+
+    def encode_rendered(self, img, device) -> bytes:
+        return encode_jpeg(rotate_cw(self._snap(img), device.output_rotation), 95)
+
+    def rendered_preview(self, img, device):
+        return self._snap(img)
 
     def preview(self, img, device, params, focal=(0.5, 0.5)):
         img = self._tuned(img, device, params, focal)

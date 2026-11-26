@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS photo_tags (
     tag      TEXT NOT NULL,
     PRIMARY KEY (photo_id, tag)
 );
+-- Data dashboards (server/dashboards/): each owns one photos row (kind =
+-- 'dashboard', source = 'dashboards') so schedules, playlists and pulls treat
+-- it like any other item; it's rendered natively per frame instead of loaded.
+CREATE TABLE IF NOT EXISTS dashboards (
+    id            INTEGER PRIMARY KEY,
+    type          TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    settings_json TEXT NOT NULL DEFAULT '{}',
+    created_at    TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pulls (
     pull_id     TEXT NOT NULL,
     device_id   TEXT NOT NULL,
@@ -117,6 +127,8 @@ MIGRATIONS = [
     ("schedule_blocks", "hold", "INTEGER NOT NULL DEFAULT 0"),
     ("device_state", "clock_offset_s", "INTEGER"),   # frame clock - real time; NULL = not learned
     ("device_state", "clock_offset_at", "TEXT"),     # when it was last measured
+    ("photos", "kind", "TEXT NOT NULL DEFAULT 'photo'"),   # photo | dashboard
+    ("photos", "dashboard_id", "INTEGER"),                 # dashboards.id when kind = 'dashboard'
 ]
 SCHEMA_VERSION = "2"
 EVENTS_KEEP = 5000  # per device
@@ -241,3 +253,11 @@ def log_event(conn, device_id: str, kind: str, summary: str, at: str, **data) ->
 
 def photo(conn, photo_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
+
+
+def dashboard(conn, dashboard_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM dashboards WHERE id = ?", (dashboard_id,)).fetchone()
+
+
+def is_dashboard(photo) -> bool:
+    return photo is not None and photo["kind"] == "dashboard"

@@ -45,9 +45,9 @@ def log_unknown(hw_device_id, now, summary, **data):
             db.log_event(conn, row["device_id"], "error", summary, now.isoformat(), **data)
 
 
-def image_url(request: Request, device, photo, battery: int | None = None) -> str:
+def image_url(request: Request, device, name: str) -> str:
     base = cfg.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
-    return f"{base}/image/{device.image_secret}/{prepare.image_name(device, photo, battery)}"
+    return f"{base}/image/{device.image_secret}/{name}"
 
 
 @dataclass
@@ -141,8 +141,10 @@ def run_pull(request: Request, device, now: datetime, *, scheduled_for: datetime
             db.log_event(conn, device.id, "error", p.error, now.isoformat(), **p.event)
         return p
 
-    p.name = prepare.image_name(device, p.photo, known_battery)
-    p.url = image_url(request, device, p.photo, known_battery)
+    # From the file just prepared, so the name matches it even if a dashboard's
+    # data refreshed in between.
+    p.name = prepare.name_for_path(device, p.photo, p.path)
+    p.url = image_url(request, device, p.name)
     with db.tx() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO pulls (pull_id, device_id, photo_id, image_url, at, battery) VALUES (?,?,?,?,?,?)",
@@ -244,7 +246,7 @@ def image(secret: str, name: str):
         battery = db.state(conn, device.id)["battery"]
     if not photo or suffix != pipe.file_suffix:
         return Response(status_code=404)
-    path = prepare.cached_path(device, key)
+    path = prepare.cached_path(device, key, photo)
     if not path.exists():
         # Cache was cleared: rebuild, but only if the URL still names the current
         # version (a stale URL -- tuning, caption or battery changed since -- 404s).

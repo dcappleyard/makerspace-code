@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from ..dashboards.draw import BLACK, WHITE, Fill, Theme
 from . import register
 from .base import Pipeline, apply_tuning, cover_crop, draw_battery, draw_caption, resize_lanczos, rotate_cw
 
@@ -65,6 +66,43 @@ class EE04BW1(Pipeline):
         # Pillow's "1" conversion is Floyd-Steinberg by default.
         bw = canvas.convert("1", dither=Image.Dither.FLOYDSTEINBERG)
         return np.asarray(bw, dtype=bool)
+
+    # Dashboards: pure black/white, with patterns standing in for greys. Text is
+    # drawn without antialiasing so glyph edges stay crisp at 1 bit.
+    THEME = Theme(
+        name="bw", antialias=False, min_font=11,
+        fills={
+            "clear": Fill(),
+            "partly": Fill(pattern="dots"),
+            "cloudy": Fill(pattern="stipple"),
+            "fog": Fill(pattern="fog"),
+            "wind": Fill(pattern="hlines"),
+            "rain": Fill(pattern="hatch"),
+            "mix": Fill(pattern="crosshatch"),
+            "snow": Fill(border_w=3),
+            "storm": Fill(bg=BLACK, icon=WHITE, halo=None),
+            "hot": Fill(pattern="vlines"),
+            "cold": Fill(border_w=3),
+        })
+
+    def dashboard_theme(self, device):
+        return self.THEME
+
+    def _bw(self, img) -> np.ndarray:
+        """Rendered RGB -> (H x W) bool, True = white (threshold, no dither)."""
+        return np.asarray(img.convert("L"), dtype=np.uint8) >= 128
+
+    def encode_rendered(self, img, device) -> bytes:
+        canvas = Image.new("L", (device.width, device.height), 255)
+        canvas.paste(img.convert("L"), (0, 0))
+        white = self._bw(rotate_cw(canvas, device.output_rotation))
+        data = pack_bits(white)
+        if len(data) != device.width * device.height // 8:
+            raise ValueError(f"packed image is {len(data)} bytes, expected {device.width * device.height // 8}")
+        return data
+
+    def rendered_preview(self, img, device):
+        return Image.fromarray((self._bw(img) * 255).astype(np.uint8), "L").convert("RGB")
 
     def prepare(self, img, device, params, focal=(0.5, 0.5)) -> bytes:
         white = self._white(img, device, params, focal)

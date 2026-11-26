@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboards · eInk Photo Server</title>
+{% include "_style.html" %}
+</head>
+<body>
+{% include "_nav.html" %}
+<p class="muted">Dashboards are drawn from live data for each frame's own panel: black and white, 16 greys or colour, at its native resolution.
+  Put one on a frame with a schedule block whose source is <b>Dashboard: …</b>, or add it to a playlist.</p>
+
+<form method="post" action="/ui/dashboards/create" class="card" style="display:block">
+  <div class="row">
+    <label>New <select name="type">{% for t in types %}<option value="{{ t.name }}">{{ t.label }}</option>{% endfor %}</select></label>
+    <label>Name <input name="name" placeholder="e.g. Weather · Madison" required></label>
+    <button>Create</button>
+  </div>
+</form>
+
+{% if not frames %}<p class="warn">No configured frame can show dashboards yet.</p>{% endif %}
+<div class="grid">
+{% for c in cards %}
+  <div class="card">
+    <a href="/dashboard/{{ c.d.id }}"><img src="/ui/thumb/{{ c.d.photo_id }}" style="width:100%; border-radius:4px; border:1px solid var(--line)" alt="{{ c.d.name }}"></a>
+    <div class="meta-title"><a href="/dashboard/{{ c.d.id }}">{{ c.d.name }}</a></div>
+    <div class="meta-sub">{{ c.type.label if c.type else c.d.type }}{% if c.status.place %} · {{ c.status.place }}{% endif %}</div>
+    <div class="meta-sub">Data: {{ c.status.fetched_at | local }}{% if c.status.error %} · <span class="warn">last fetch failed</span>{% endif %}</div>
+  </div>
+{% else %}
+  <p class="muted">No dashboards yet.</p>
+{% endfor %}
+</div>
+</body>
+</html>

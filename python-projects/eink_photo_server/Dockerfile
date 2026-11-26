@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 WORKDIR /app
-# A font with broad Unicode coverage for server-rendered captions (installed at
-# build time, not vendored in the repo).
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+# A font with broad Unicode coverage for server-rendered captions and dashboards
+# (installed at build time, not vendored in the repo), and CA certificates for
+# dashboards' HTTPS data sources (weather.gov).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

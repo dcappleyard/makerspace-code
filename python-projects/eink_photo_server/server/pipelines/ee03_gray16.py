@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from ..dashboards.draw import Fill, Theme
 from . import register
 from .base import (Pipeline, apply_tuning, cover_crop, draw_battery, draw_caption, resize_lanczos,
                    rotate_cw)
@@ -46,6 +47,12 @@ def unpack_nibbles(data: bytes, w: int, h: int) -> Image.Image:
     idx = np.empty(b.size * 2, dtype=np.uint8)
     idx[0::2], idx[1::2] = b >> 4, b & 0x0F
     return Image.fromarray((idx[: w * h].reshape(h, w) * 17).astype(np.uint8), "L")
+
+
+def _g(level: int) -> tuple[int, int, int]:
+    """One of the panel's 16 greys (0 = black .. 15 = white) as an RGB ink."""
+    v = level * 17
+    return (v, v, v)
 
 
 @register
@@ -97,6 +104,45 @@ class EE03Gray16(Pipeline):
         q = canvas.convert("RGB").quantize(palette=_palette(), dither=Image.Dither.FLOYDSTEINBERG)
         # Padding slots are white too; fold any that got picked back onto 15.
         return np.minimum(np.asarray(q, dtype=np.uint8), LEVELS - 1)
+
+    # Dashboards: exact grey levels, lightest for clear skies, darkest for storms.
+    THEME = Theme(
+        name="gray16", muted=_g(5), rule=_g(9), lo=_g(5), bar_bg=_g(0), min_font=14,
+        fills={
+            "clear": Fill(),
+            "partly": Fill(bg=_g(13), border=None),
+            "cloudy": Fill(bg=_g(11), border=None),
+            "fog": Fill(bg=_g(12), border=None, pattern="fog", pattern_ink=_g(8), halo=_g(12)),
+            "wind": Fill(bg=_g(12), border=None),
+            "rain": Fill(bg=_g(8), border=None, icon=_g(15), halo=None),
+            "mix": Fill(bg=_g(7), border=None, icon=_g(15), halo=None),
+            "snow": Fill(bg=_g(15), border=_g(6), border_w=2),
+            "storm": Fill(bg=_g(2), border=None, icon=_g(15), halo=None),
+            "hot": Fill(bg=_g(14), border=_g(0), border_w=3),
+            "cold": Fill(bg=_g(14), border=_g(6), border_w=3),
+        })
+
+    def dashboard_theme(self, device):
+        return self.THEME
+
+    def _levels(self, img) -> np.ndarray:
+        """Rendered RGB -> 16-level indices (snap to nearest, no dither)."""
+        return np.clip(np.rint(np.asarray(img.convert("L"), dtype=np.float32) / 17), 0, LEVELS - 1).astype(np.uint8)
+
+    def encode_rendered(self, img, device) -> bytes:
+        # The dashboard fills the strip; the rest of the panel stays white.
+        top, _ = self._strip(device)
+        canvas = Image.new("L", (device.width, device.height), 255)
+        canvas.paste(img.convert("L"), (0, top))
+        idx = self._levels(rotate_cw(canvas, device.output_rotation))
+        data = pack_nibbles(idx)
+        expected = device.width * device.height // 2
+        if len(data) != expected:
+            raise ValueError(f"packed image is {len(data)} bytes, expected {expected}")
+        return data
+
+    def rendered_preview(self, img, device):
+        return Image.fromarray((self._levels(img) * 17).astype(np.uint8), "L").convert("RGB")
 
     def prepare(self, img, device, params, focal=(0.5, 0.5)) -> bytes:
         data = pack_nibbles(self._quantized(img, device, params, focal))

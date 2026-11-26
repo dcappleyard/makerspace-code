@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ dash.name }} · Dashboards · eInk Photo Server</title>
+{% include "_style.html" %}
+<style>
+  .settings fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 8px; padding:6px 10px; }
+  .settings legend { font-weight:600; font-size:13px; }
+  .settings label { display:inline-flex; gap:6px; align-items:center; margin:3px 14px 3px 0; font-size:13px; }
+  .settings input[type=number] { width:7em; }
+  .settings .help { color:var(--muted); font-size:12px; }
+  .panels { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+  .panels figure { margin:0; } .panels img { max-width:min(640px, 100%); border:1px solid var(--line); background:#fff; }
+  .panels figcaption { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+{% include "_nav.html" %}
+<h2 style="margin-top:4px">{{ dash.name }} <span class="muted" style="font-weight:normal">· {{ type.label }}</span></h2>
+
+<div class="card status">
+  {% if status.place %}<div>Location: {{ status.place }}{% if status.grid %} <span class="muted">({{ status.grid }})</span>{% endif %}</div>{% endif %}
+  <div>Data fetched: {{ status.fetched_at | local }}</div>
+  {% if status.station %}<div>Current conditions: {{ status.station }}</div>{% endif %}
+  {% if status.error %}<div class="warn">Last fetch failed {{ status.error_at | local }}: {{ status.error }}</div>{% endif %}
+  <div>Used by: {% for d in uses %}<a href="/frame/{{ d.id }}">{{ d.name }}</a>{{ ", " if not loop.last }}{% else %}<span class="muted">no schedule yet</span>{% endfor %}
+    {% for p in in_playlists %} · <a href="/playlist/{{ p.id }}">{{ p.name }}</a>{% endfor %}</div>
+</div>
+
+<form method="post" action="/dashboard/{{ dash.id }}/save" id="settings" class="card settings" style="display:block">
+  <label>Name <input name="name" value="{{ dash.name }}" required></label>
+  {% for group, fields in groups.items() %}
+  <fieldset><legend>{{ group }}</legend>
+    {% for f in fields %}{% set v = settings[f.key] %}
+    <label title="{{ f.help }}">{{ f.label }}
+      {% if f.kind == "bool" %}<input type="checkbox" name="{{ f.key }}" value="1" {{ "checked" if v }}>
+      {% elif f.kind == "select" %}<select name="{{ f.key }}">{% for val, lab in f.options %}<option value="{{ val }}" {{ "selected" if val|string == v|string }}>{{ lab }}</option>{% endfor %}</select>
+      {% elif f.kind == "number" %}<input type="number" name="{{ f.key }}" value="{{ v }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %} step="{{ f.step or 'any' }}">
+      {% else %}<input name="{{ f.key }}" value="{{ v }}">{% endif %}
+      {% if f.help %}<span class="help">{{ f.help }}</span>{% endif %}
+    </label>
+    {% endfor %}
+  </fieldset>
+  {% endfor %}
+  <div class="row">
+    <button>Save</button>
+    <button formaction="/dashboard/{{ dash.id }}/fetch">Fetch data now</button>
+    <span class="muted">The previews update as you change settings; frames get them once saved.</span>
+  </div>
+</form>
+
+<h2>On each frame</h2>
+<div class="panels">
+{% for d in frames %}
+  <figure>
+    <img data-device="{{ d.id }}" src="/ui/dashboard/{{ dash.id }}/preview/{{ d.id }}" alt="{{ d.name }}">
+    <figcaption>{{ d.name }} · {{ d.pipeline }} ·
+      <form method="post" action="/ui/device/{{ d.id }}/queue"><input type="hidden" name="photo_id" value="{{ photo.id }}"><button>Show next on this frame</button></form>
+    </figcaption>
+  </figure>
+{% else %}
+  <p class="muted">No configured frame can show dashboards.</p>
+{% endfor %}
+</div>
+
+<form method="post" action="/dashboard/{{ dash.id }}/delete" onsubmit="return confirm('Delete this dashboard? Schedule blocks using it will find it empty.')" style="display:block; margin-top:24px">
+  <button>Delete dashboard</button>
+</form>
+
+<script>
+  // Live preview: redraw each frame's panel with the unsaved settings.
+  const form = document.getElementById("settings");
+  let timer;
+  function refresh() {
+    const q = new URLSearchParams(new FormData(form));
+    q.set("live", "1");
+    document.querySelectorAll("img[data-device]").forEach(img => {
+      img.src = `/ui/dashboard/{{ dash.id }}/preview/${img.dataset.device}?${q}`;
+    });
+  }
+  form.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(refresh, 400); });
+  form.addEventListener("change", () => { clearTimeout(timer); timer = setTimeout(refresh, 100); });
+</script>
+</body>
+</html>

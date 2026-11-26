@@ -118,6 +118,8 @@ def caption_fields(meta: dict) -> dict:
 def read(photo) -> dict:
     """The photo's sidecar, created from EXIF if it doesn't exist yet."""
     from . import photos
+    if photo["kind"] == "dashboard":   # rendered, no file and no caption metadata
+        return {**{f: "" for f in FIELDS}, "tags": [], "extra": {}}
     path = path_for(photo)
     if path.exists():
         return parse(path.read_bytes())
@@ -144,7 +146,7 @@ def write(photo, meta: dict) -> dict:
 def backfill() -> int:
     """Create missing sidecars (from EXIF) and re-index every photo's tags."""
     with db.tx() as conn:
-        rows = conn.execute("SELECT * FROM photos").fetchall()
+        rows = conn.execute("SELECT * FROM photos WHERE kind != 'dashboard'").fetchall()
     for p in rows:
         write(p, read(p))
     return len(rows)

@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
+from PIL import Image
 
 from .. import config as cfg
 from .. import battery, db, photos, pipelines, prepare, sidecar, sources, testcards
@@ -51,6 +52,9 @@ def grid_context(conn, rows) -> dict:
 def source_page(request: Request, key: str, tag: str = "", log: str = ""):
     if key == "testcards":
         return testcard_page(request)
+    if key == "dashboards":
+        from .dashboard_routes import dashboards_page
+        return dashboards_page(request)
     if not sources.is_raw(key):
         raise HTTPException(404, "unknown source")
     tag = " ".join(tag.split()).lower()
@@ -178,7 +182,26 @@ def thumb(photo_id: int):
         p = db.photo(conn, photo_id)
     if not p:
         raise HTTPException(404)
+    if db.is_dashboard(p):
+        return dashboard_thumb(p)
     return FileResponse(photos.thumb_path(p), media_type="image/jpeg")
+
+
+def dashboard_thumb(p, device_id: str | None = None):
+    """A dashboard's thumbnail: its current render for a frame (the first one
+    configured, unless named), scaled down."""
+    devs = [cfg.config.devices[device_id]] if device_id in cfg.config.devices else list(cfg.config.devices.values())
+    for dev in devs:
+        try:
+            path = prepare.get_preview(dev, p)
+        except NotImplementedError:
+            continue
+        img = Image.open(path)
+        img.thumbnail(photos.THUMB_SIZE)
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, "JPEG", quality=85)
+        return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    raise HTTPException(404, "no frame can show dashboards")
 
 
 @router.get("/ui/preview/{device_id}/{photo_id}/{kind}")

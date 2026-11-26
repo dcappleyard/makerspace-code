@@ -7,10 +7,11 @@ import os
 from fastapi import FastAPI
 
 from . import config as cfg
-from . import db, pipelines, sidecar, sources
+from . import dashboards, db, pipelines, sidecar, sources
 from .protocols import ROUTERS, SHARED_ROUTER
 from .protocols.source_upload import router as source_upload_router
 from .web.common import FormError, form_error_handler
+from .web.dashboard_routes import router as dashboard_router
 from .web.frame_routes import router as frame_router
 from .web.playlist_routes import router as playlist_router
 from .web.routes import router as web_router
@@ -22,6 +23,7 @@ db.init()
 sidecar.backfill()  # create missing sidecars (from EXIF) and rebuild the tag index
 sources.scan_all()  # pick up anything dropped into folder sources while we were down
 sources.start_scanner(int(os.environ.get("SCAN_INTERVAL", "60")))
+dashboards.start_refresher()  # keeps each dashboard's data (e.g. weather.gov) fresh
 for dev in cfg.config.devices.values():
     pipelines.get(dev.pipeline)  # fail fast on a typo'd pipeline name
     if dev.protocol not in ROUTERS:
@@ -44,3 +46,4 @@ for r in ROUTERS.values():
 app.include_router(web_router)
 app.include_router(playlist_router)
 app.include_router(frame_router)
+app.include_router(dashboard_router)

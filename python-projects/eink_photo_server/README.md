@@ -3,6 +3,7 @@
 One server that feeds all the e-ink photo frames. Frames **pull** on their own timers (battery frames sleep, so pushing is unreliable). The server:
 - stores photos: uploaded in the web UI, uploaded by a client such as the photobooth, or dropped into a folder
 - prepares them for each frame type (crop, resize, tone tuning, encoding)
+- draws data **dashboards** (weather.gov weather so far) natively for each frame type
 - keeps shared playlists, and a daily schedule per frame that picks from a source or a playlist
 
 It runs in Docker on a Raspberry Pi.
@@ -25,6 +26,8 @@ Each device in `devices.yaml` pairs two things:
 
 Sources, playlists, scheduling and photo storage are shared by every device.
 
+**Dashboards** (`server/dashboards/`) are the second kind of content. A photo is a file each pipeline crops and dithers; a dashboard is *drawn* for each panel at pull time from live data, using only the inks that panel shows exactly. See [Dashboards](#dashboards-weather) below.
+
 ### Adding a pipeline
 1. Create `server/pipelines/<something>.py`.
 2. Subclass `Pipeline` and decorate it with `@register`. Implement `prepare()`, and `preview()` if you want one.
@@ -39,7 +42,7 @@ Add `server/protocols/<name>.py` with a FastAPI `router` and a `PROTOCOL` name, 
 The main nav is **Sources · Playlists · Frames**, each with sub-tabs. `/` redirects to `/sources/library`.
 
 ### Sources
-Sub-tabs: **Library**, one tab per folder source from `devices.yaml` (e.g. **Photobooth**), and **Test cards**.
+Sub-tabs: **Library**, one tab per folder source from `devices.yaml` (e.g. **Photobooth**), **Test cards**, and **Dashboards**.
 - **Library:** web upload, with an optional same-named `.xml` sidecar import (see below).
 - **Each photo card has:**
   - click the photo to set the crop focal point
@@ -219,6 +222,23 @@ Pure ink swatches barely respond to tuning, so judge the differences on the ramp
 - To see it right away, wake the frame and resend its setup (`configure_frame --print-curl`).
 - When you've picked a winner, copy that column's values into `devices.yaml` → `tuning`.
 
+## Dashboards (weather)
+**Sources → Dashboards** lists them; **Create** one (type + name), then edit its settings. The edit page shows a **live preview for every configured frame**, redrawn as you change settings; **Save** to apply them. Put a dashboard on a frame with a schedule block whose source is **Dashboard: <name>** (with an interval, so it refreshes), add it to a playlist, or **Show next on this frame**.
+
+How it fits together:
+- **Storage.** A `dashboards` row (type, name, `settings_json`) plus one `photos` row with `kind = 'dashboard'`, so schedules, playlists, queueing and pulls need no special cases. `prepare.py` dispatches on the kind.
+- **Types** (`server/dashboards/<type>.py`, `@register`) provide settings + a form, `model()` (every value the screen will show, rounded) and `render()`. Adding a dashboard type is one module.
+- **Per-panel drawing.** Each pipeline provides `surface()` (its content size: the EE03's strip, the EE04's 800×480...) with a **theme** of inks it shows exactly, and `encode_rendered()`, which packs the pixels with no tuning, cropping or error-diffusion dither. EE04 1-bit gets its "greys" from patterns (stipple, hatch, lines) and crisp non-antialiased text; EE03 uses exact grey levels; the Bloomin8 uses flat Spectra 6 colours (yellow sun, blue rain, black storm, red highs, blue lows).
+- **Only redraw on change.** The cache key covers the *model*, not the clock, so an ESP32 frame that wakes when nothing visible changed is told `keep` and doesn't refresh. "Updated" is shown to the hour for the same reason. Renders are named `cache/<device>/d<id>-<key>` and older ones are pruned (newest 3 kept).
+
+**Weather** (`dashboards/weather.py`, data in `dashboards/nws.py`):
+- Data comes from **api.weather.gov** (no key). `/points` gives the forecast grid and nearby stations; `/forecast` (12-hour day/night periods → daily high = day period, low = the night after it, paired by date), `/forecast/hourly`, and the nearest station's latest observation for current conditions. Conditions come from the NWS icon code (falling back to the forecast text), mapped to a condition (clear, partly, cloudy, wind, rain, mix, snow, storm, fog, hot, cold) that picks the tile's shade and a [Weather Icons](https://erikflowers.github.io/weather-icons/) glyph (font vendored in `dashboards/fonts/`, SIL OFL 1.1).
+- A background thread refreshes each location in use every 20 minutes (backing off after failures) into `DATA_DIR/dashboards/wx-<lat>,<lon>.json`; dashboards at the same location share it. Pulls never wait on weather.gov: they draw the last good data, with **STALE** in the title bar after 3 hours. **Fetch data now** on the edit page fetches immediately.
+- **Styles.** **Range bars** (default, TRMNL "weather at a glance"-like): each day is a rounded pill spanning its low to high on a scale shared across the section (condition icon and high at the top, low at the bottom, shaded for the condition), and each hour is a pill floating at its temperature; a small 2° change isn't stretched to full height (the scale spans at least 10 °F / 6 °C). **Tiles**: a grid with the label, temperatures and an inset condition tile per period.
+- **Orientation.** On a landscape panel the current conditions are a left column: time of the observation, a big temperature with a pointer onto the first section's scale, then the conditions, feels-like and today's high/low. On a portrait panel (`output_rotation` 90/270 on an 800×480 frame) they are a band across the top. The sections stack below or beside it.
+- Settings: location (lat/lon, label, °F/°C), style, the optional **current conditions**, two **sections** (each daily, hourly or none; stacked, side by side, or auto; first section's share), days (3-7, default 7), hours (4-12, default 7, so the two sections' columns line up) and hour step, precip chance (≥20%), title bar and battery. "Updated" in the title bar includes the date, so a frame whose battery died shows how old its screen is.
+- Render without the server: `python -m server.tools.render_dashboard --out /tmp/wx` writes each pipeline's panel image (`--set key=value` to try settings, `--portrait`, `--cached`). On macOS with PlatformIO's Python, add `SSL_CERT_FILE=/etc/ssl/cert.pem` if HTTPS fails.
+
 ## Sources and the photobooth
 A **source** is a pool of photos. There are three kinds: the Library, Test cards, and folder sources you define in `devices.yaml`. A folder source feeds in photos from outside, e.g. the `esp32-projects/xiao_s3_sense_photobooth` firmware, which uploads to it.
 
@@ -331,7 +351,8 @@ Use `--dry-run` to only print the PUT.
 - `db.sqlite`: photos, playlists, per-frame source positions, device state, and pull history.
 - `originals/` and `thumbs/`: Library uploads, stored by sha256.
 - Folder sources' files (e.g. `sources/photobooth/`), under `DATA_DIR` unless configured otherwise. See below.
-- `cache/<device>/`: prepared images. Each is keyed by source, pipeline + version, geometry, tuning, and focal point.
+- `cache/<device>/`: prepared images. Each is keyed by source, pipeline + version, geometry, tuning, and focal point. Dashboard renders are `d<id>-<key>` files, pruned as they change.
+- `dashboards/`: cached dashboard data, e.g. `wx-<lat>,<lon>.json` from weather.gov.
 
 ## Bloomin8 notes / to verify on hardware
 - **Protocol:** the response shape follows Lukafin/bloomin8-pull-server and fwmone/bloomin8_pull. HTTP is always 200, and the real `status` (200 SHOW / 204 / 4xx ERROR) is in the JSON body. Times are ISO-8601 UTC with a `Z` suffix.
