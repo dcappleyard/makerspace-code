@@ -21,6 +21,8 @@ class Pipeline:
     content_type: str = "image/jpeg"
     color: bool = False   # panel can show colour (e.g. red low-battery overlay)
     default_params: dict = {}
+    # devices.yaml `options:` offered on the Frames → Settings card: {key: (default, other choices...)}
+    editable_options: dict = {}
 
     def prepare(self, img: Image.Image, device, params: dict,
                 focal: tuple[float, float] = (0.5, 0.5)) -> bytes:

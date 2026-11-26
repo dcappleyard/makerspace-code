@@ -13,6 +13,9 @@
   .scroll { max-height:420px; overflow:auto; }
   tr.dirty, form.dirty { background:#fff4d1; }
   button.dirty { background:var(--warn); color:#fff; border-color:var(--warn); font-weight:600; }
+  form.settings fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 10px; display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; }
+  form.settings legend { font-weight:600; padding:0 4px; }
+  form.settings > p { margin-top:0; }
 </style>
 </head>
 <body>
@@ -63,6 +66,50 @@
           </select></td>
       <td><input form="{{ fid }}" class="num" type="number" min="5" name="interval" value="{{ (b.interval or '') if b else '' }}" placeholder="hold" {{ "disabled" if not editable }}></td>
 {% endmacro %}
+<h2>Settings</h2>
+{% set S = settings %}
+<details class="card" {{ "open" if request.query_params.error }}>
+  <summary>{{ dev.width }}×{{ dev.height }} {{ "portrait" if dev.height > dev.width else "landscape" }} (rot {{ dev.output_rotation }}°) ·
+    battery {{ dev.battery_monitor }} · captions {{ dev.captions }}{% if dev.tuning %} · {{ dev.tuning|length }} tuning override{{ "s" if dev.tuning|length != 1 }}{% endif %}</summary>
+  <form method="post" action="/frame/{{ dev.id }}/settings" class="settings">
+    <p class="muted">Saved into <code>devices.yaml</code> (comments kept; the previous file is kept as <code>devices.yaml.bak</code>) and applied at once:
+      the next pull uses them. Ids, protocol, pipeline, panel size and tokens stay hand-edited.</p>
+    <fieldset><legend>Frame</legend>
+      <label>Name <input name="name" value="{{ dev.name }}"></label>
+      <label>Orientation
+        <select name="output_rotation">
+          {% for r, w, h, o in S.rotations %}<option value="{{ r }}" {{ "selected" if r == dev.output_rotation }}>{{ r }}° → {{ w }}×{{ h }} {{ o }}</option>{% endfor %}
+        </select></label>
+      <span class="muted">Panel {{ S.native[0] }}×{{ S.native[1] }} native. Rotation turns the image to suit how it hangs; width × height
+        (as mounted) follow, and photos and dashboards are laid out for that shape. 180° = the other way up.</span>
+    </fieldset>
+    <fieldset><legend>Overlays</legend>
+      <label>Battery %
+        <select name="battery_monitor">{% for m in S.battery_monitors %}<option {{ "selected" if m == dev.battery_monitor }}>{{ m }}</option>{% endfor %}</select></label>
+      <label>Captions
+        <select name="captions">{% for c in S.caption_layouts %}<option {{ "selected" if c == dev.captions }}>{{ c }}</option>{% endfor %}</select></label>
+      <label>Caption size <input class="num" type="number" min="6" name="caption_size" value="{{ dev.caption_size or '' }}" placeholder="{{ dev.caption_px }}"> px</label>
+      {% for key, choices in S.option_choices.items() %}
+      <label>{{ key|capitalize }}
+        <select name="options.{{ key }}">{% for c in choices %}<option {{ "selected" if c == dev.options.get(key, choices[0]) }}>{{ c }}</option>{% endfor %}</select></label>
+      {% endfor %}
+    </fieldset>
+    <fieldset><legend>Tuning <span class="muted">(blank = pipeline default; per-photo tuning still wins)</span></legend>
+      {% for k, default in S.defaults.items() %}
+      <label>{{ k }} <input class="num" type="number" step="any" name="tuning.{{ k }}" value="{{ dev.tuning.get(k, '') }}" placeholder="{{ default }}"></label>
+      {% endfor %}
+    </fieldset>
+    <fieldset><legend>Default schedule</legend>
+      <label>Wake hours <input type="time" name="wake_start" value="{{ dev.wake_start.strftime('%H:%M') if dev.wake_start else '' }}">
+        – <input type="time" name="wake_end" value="{{ dev.wake_end.strftime('%H:%M') if dev.wake_end else '' }}"></label>
+      <label>Every <input class="num" type="number" min="5" name="interval_minutes" value="{{ dev.interval_minutes }}"> min</label>
+      <span class="{{ 'muted' if not using_fallback else '' }}">{% if using_fallback %}In use: this frame has no schedule blocks yet.{% else %}Not in use: the Schedule blocks below decide this frame's day.
+        These only apply to a frame with no blocks.{% endif %}</span>
+    </fieldset>
+    <button>Save settings</button>
+  </form>
+</details>
+
 <h2>Schedule</h2>
 <div class="card">
   <p class="muted">A daily timeline: each block starts at its time and runs until the next block starts.

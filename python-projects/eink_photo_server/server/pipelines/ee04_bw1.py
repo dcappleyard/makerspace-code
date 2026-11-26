@@ -44,6 +44,7 @@ class EE04BW1(Pipeline):
     content_type = "application/octet-stream"
     color = False
     # A little extra contrast helps photos survive a 1-bit dither.
+    editable_options = {"fit": ("cover", "letterbox")}   # first = default (Frames → Settings)
     default_params = {"contrast": 1.15, "brightness": 1.0, "gamma": 1.0,
                       "lift": 0.0, "lift_threshold": 90.0}
 

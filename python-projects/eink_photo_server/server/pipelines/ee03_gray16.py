@@ -62,6 +62,7 @@ class EE03Gray16(Pipeline):
     file_suffix = "_G.bin"
     content_type = "application/octet-stream"
     color = False
+    editable_options = {"fit": ("letterbox", "cover")}   # first = default (Frames → Settings)
     default_params = {"contrast": 1.0, "brightness": 1.0, "gamma": 1.0,
                       "lift": 0.0, "lift_threshold": 90.0}
 

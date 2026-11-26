@@ -1,5 +1,7 @@
 # Copy to <DATA_DIR>/devices.yaml (./data/devices.yaml with docker compose).
 # Static per-device config; runtime state (playlist, battery, ...) lives in db.sqlite.
+# A frame's Settings card (Frames tab) can edit its name, rotation, overlays,
+# tuning, fit and default schedule here; comments are kept.
 timezone: America/Chicago
 # Optional, read only by frame_tool/bloomin8_tool.py (the server ignores it):
 # the server as the frames reach it.

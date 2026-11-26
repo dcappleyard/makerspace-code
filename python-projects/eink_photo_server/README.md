@@ -61,7 +61,19 @@ Sub-tabs: **Library**, one tab per folder source from `devices.yaml` (e.g. **Pho
 - Playlists aren't owned by frames. Several frames can share one.
 
 ### Frames
-One sub-tab per frame (`/frame/<id>`): status, schedule with a next-24-hours timeline, wake timing, and the frame's log.
+One sub-tab per frame (`/frame/<id>`): status, settings, schedule with a next-24-hours timeline, wake timing, and the frame's log.
+
+**Settings** edits the commonly adjusted `devices.yaml` keys for that frame (`server/device_edit.py`):
+- **Frame:** name, and orientation.
+- **Overlays:** `battery_monitor`, `captions`, `caption_size`, and the pipeline's `fit` option (EE03/EE04).
+- **Tuning:** one field per pipeline parameter. Blank means the pipeline default.
+- **Default schedule:** `wake_hours` and `interval_minutes`. These only apply to a frame with no schedule blocks.
+
+Saving writes `devices.yaml` with `ruamel.yaml`, which keeps comments and key order. Keys the file doesn't have and that are still at their default are left out. The result is validated the way the server loads it before it replaces the file, and the old file is kept as `devices.yaml.bak`. The config is then reloaded, the change is logged in the frame's log, and the next pull uses it (the prepared-image cache is keyed by geometry and tuning).
+
+Ids, protocol, pipeline, panel size, tokens and secrets stay hand-edited.
+
+**Orientation:** `width`/`height` are the panel *as mounted*, and `output_rotation` turns the image to the panel's native orientation. So the UI only offers a rotation (0/90/180/270), and width/height follow it: 90/270 swap the native size. Photos are cropped to that shape, and dashboards pick their landscape or portrait layout from it (e.g. the weather screen's current-conditions band vs column).
 
 ## Schedule (daily blocks)
 Each frame has a daily timeline of blocks, edited on its tab. A block starts at a clock time and runs until the next block starts, wrapping past midnight. A block is **start time + source + selection + refresh**.

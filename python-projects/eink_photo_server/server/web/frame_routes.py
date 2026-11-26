@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import Response
 
 from .. import config as cfg
-from .. import db, pipelines, schedule, sources
+from .. import db, device_edit, pipelines, schedule, sources
 from .common import FormError, back, device_or_404, require_admin, templates
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -34,6 +34,21 @@ def drift_stats(conn, device_id: str) -> dict | None:
     median = int(statistics.median(samples))
     return {"n": len(samples), "median": median, "min": min(samples), "max": max(samples),
             "suggested": -median, "ours_only": bool(ours)}
+
+
+def _settings_context(dev) -> dict:
+    native = device_edit.native_size(dev)
+    pipe = pipelines.get(dev.pipeline)
+    return {
+        "rotations": [(r, *device_edit.mounted_size(native, r),
+                       device_edit.orientation(*device_edit.mounted_size(native, r)))
+                      for r in device_edit.ROTATIONS],
+        "native": native,
+        "defaults": pipe.default_params,
+        "option_choices": device_edit.option_choices(dev),
+        "battery_monitors": cfg.BATTERY_MONITORS,
+        "caption_layouts": cfg.CAPTION_LAYOUTS,
+    }
 
 
 def _events(conn, device_id: str, limit: int | None = LOG_ROWS) -> list[dict]:
@@ -80,6 +95,7 @@ def frame_page(request: Request, device_id: str):
             "events": _events(conn, dev.id),
             "drift": drift_stats(conn, dev.id),
             "early_window": int(schedule.EARLY_WINDOW.total_seconds() // 60),
+            "settings": _settings_context(dev),
             "params": {**pipelines.get(dev.pipeline).default_params, **dev.tuning},
             "selections": schedule.SELECTIONS,
         }
@@ -229,6 +245,23 @@ def clock_forget(request: Request, device_id: str):
         db.state(conn, device_id)
         conn.execute("UPDATE device_state SET clock_offset_s = NULL, clock_offset_at = NULL WHERE device_id = ?",
                      (device_id,))
+    return back(request)
+
+
+# --- settings (devices.yaml) -------------------------------------------------
+
+@router.post("/frame/{device_id}/settings")
+async def settings_save(request: Request, device_id: str):
+    device_or_404(device_id)
+    form = dict(await request.form())
+    try:
+        changed = device_edit.apply(device_id, form)
+    except device_edit.SettingsError as e:
+        raise FormError(str(e)) from None
+    if changed:
+        with db.tx() as conn:
+            db.log_event(conn, device_id, "settings", "settings changed: " + ", ".join(changed),
+                         schedule.utc_now().isoformat())
     return back(request)
 
 
