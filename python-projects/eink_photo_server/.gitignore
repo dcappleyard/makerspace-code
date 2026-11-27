@@ -1,5 +1,8 @@
 # Runtime data: personal photos, cache, db, and devices.yaml (holds tokens).
 data/
 
+# Secrets (ADMIN_PASSWORD) loaded by docker compose
+.env
+
 # Local copy of the Pi's devices.yaml (tokens) for frame_tool
 eink_data_copy/
