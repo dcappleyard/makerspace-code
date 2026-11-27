@@ -38,3 +38,17 @@ shows:
       - strand_flow
       - firework
       - {effect: twinkle, minutes: 10}
+      - wled:1
+      - wled:2
+  evening-more-stuff:
+    effects:
+      - {effect: sunset, minutes: 30, once: true}
+      - rainbow_helix
+      - snow
+      - ring_spin
+      - strand_flow
+      - firework
+      - {effect: swarm, minutes: 10}
+      - wled:1
+      - sandworm
+      - wled:2
