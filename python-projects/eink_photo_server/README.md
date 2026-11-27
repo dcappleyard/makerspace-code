@@ -44,7 +44,10 @@ The main nav is **Sources · Playlists · Frames**, each with sub-tabs. `/` redi
 ### Sources
 Sub-tabs: **Library**, one tab per folder source from `devices.yaml` (e.g. **Photobooth**), **Test cards**, and **Dashboards**.
 - **Library:** web upload, with an optional same-named `.xml` sidecar import (see below).
-- **Each photo card has:**
+- **Compact grid** (the default on Library and folder-source tabs): small tiles with title, date/place/shape, playlist and tag chips. Clicking a tile selects it, and **Edit…** opens that photo's full card. **View: Full cards** switches the whole grid to full cards; the choice is remembered in a cookie.
+- **Filters** above the grid: search (title, place, artist, film, filename, tags; every word must match), playlist (**Not in a playlist** is the one for tidying up, or **In: <playlist>**), shape (panorama ≥ 2:1 for the EE03 strip, landscape, square, portrait), and sort (newest/oldest added, date taken, title). They combine with the tag chips, and bulk actions return to the same filtered view.
+- **Bulk bar** for the selection (shift-click for a range): **Playlist** Add/Remove (appended in page order, skipping photos already in it; **+ New playlist…** creates one), **Tag** Add/Remove (comma-separated; writes each photo's sidecar), and **Delete selected**. The selection survives the action, so you can add to a playlist and then tag the same photos.
+- **Each full photo card has:**
   - click the photo to set the crop focal point
   - **Edit info** (sidecar fields and tags)
   - per-photo tuning

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -48,8 +48,51 @@ def grid_context(conn, rows) -> dict:
     }
 
 
+SHAPES = (("", "Any shape"), ("pano", "Panorama"), ("landscape", "Landscape"), ("square", "Square"),
+          ("portrait", "Portrait"))
+SORTS = (("new", "Newest added"), ("old", "Oldest added"), ("taken", "Date taken"), ("title", "Title"))
+
+
+def shape_of(p) -> str:
+    """Aspect class: panorama (>= 2:1, e.g. for the EE03 strip), landscape,
+    square, portrait."""
+    if not p["width"] or not p["height"]:
+        return ""
+    r = p["width"] / p["height"]
+    return "pano" if r >= 2.0 else "landscape" if r > 1.1 else "square" if r >= 0.9 else "portrait"
+
+
+def _filter_photos(rows, metas, in_playlists, f) -> list:
+    """Apply the Library filter strip (playlist / shape / search) and sort."""
+    out = []
+    q = f["q"].lower().split()
+    for p in rows:
+        pls = [pid for pid, _ in in_playlists.get(p["id"], [])]
+        if f["pl"] == "none" and pls:
+            continue
+        if f["pl"].isdigit() and int(f["pl"]) not in pls:
+            continue
+        if f["shape"] and shape_of(p) != f["shape"]:
+            continue
+        if q:
+            m = metas[p["id"]]
+            hay = " ".join([p["filename"] or "", *(m.get(k, "") for k in sidecar.FIELDS), *m["tags"]]).lower()
+            if not all(w in hay for w in q):
+                continue
+        out.append(p)
+    if f["sort"] == "old":
+        out.sort(key=lambda p: p["id"])
+    elif f["sort"] == "taken":     # newest taken first, undated last
+        out.sort(key=lambda p: (metas[p["id"]].get("date") or "", p["id"]), reverse=True)
+        out.sort(key=lambda p: not metas[p["id"]].get("date"))
+    elif f["sort"] == "title":
+        out.sort(key=lambda p: ((metas[p["id"]].get("title") or p["filename"] or "").lower(), p["id"]))
+    return out
+
+
 @router.get("/sources/{key}")
-def source_page(request: Request, key: str, tag: str = "", log: str = ""):
+def source_page(request: Request, key: str, tag: str = "", log: str = "", pl: str = "", shape: str = "",
+                q: str = "", sort: str = "new", view: str = "", id: int | None = None):
     if key == "testcards":
         return testcard_page(request)
     if key == "dashboards":
@@ -68,19 +111,38 @@ def source_page(request: Request, key: str, tag: str = "", log: str = ""):
         tag_counts = conn.execute(
             "SELECT t.tag, COUNT(*) AS n FROM photo_tags t JOIN photos p ON p.id = t.photo_id "
             "WHERE p.source = ? GROUP BY t.tag ORDER BY t.tag", (key,)).fetchall()
+        total = len(rows)
+        if id is not None:                      # one photo's full card (from the compact grid)
+            rows = [r for r in rows if r["id"] == id]
         ctx = grid_context(conn, rows)
+    filters = {"tag": tag, "pl": pl, "shape": shape if shape in dict(SHAPES) else "",
+               "q": " ".join(q.split()), "sort": sort if sort in dict(SORTS) else "new"}
+    ctx["photos"] = _filter_photos(ctx["photos"], ctx["metas"], ctx["in_playlists"], filters)
+    # Compact grid by default; the choice sticks (cookie). A single photo opens as a full card.
+    view_pref = view if view in ("compact", "full") else request.cookies.get("grid_view", "compact")
+    view_now = "full" if id is not None else view_pref
+
+    def qs(**kw) -> str:
+        """This page's query string with some filters changed (blank = drop)."""
+        merged = {**filters, **kw}
+        return "?" + urlencode({k: v for k, v in merged.items() if v and not (k == "sort" and v == "new")})
     folder = cfg.config.sources.get(key)
     scanned = sources.last_scan.get(key)
     base = cfg.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
-    return templates.TemplateResponse(request, "source.html", {
+    resp = templates.TemplateResponse(request, "source.html", {
         **ctx, "section": "sources", "page": key, "source_key": key,
         "source_name": sources.label(None, key) if key in sources.BUILTIN else folder.name,
         "folder": folder, "folder_path": str(folder.path) if folder else None,
         "upload_url": f"{base}/sources/{key}/upload" if folder else None,
         "last_scan": datetime.fromtimestamp(scanned, cfg.config.tz).strftime("%a %b %d %H:%M:%S") if scanned else None,
-        "tag": tag, "tag_counts": tag_counts,
+        "tag": tag, "tag_counts": tag_counts, "filters": filters, "filtered": any(
+            filters[k] for k in ("tag", "pl", "shape", "q")), "total": total, "qs": qs,
+        "shapes": SHAPES, "sorts": SORTS, "view": view_now, "single": id is not None, "shape_of": shape_of,
         **_battery_context(key, log),
     })
+    if view in ("compact", "full"):
+        resp.set_cookie("grid_view", view, max_age=365 * 86400, samesite="lax")
+    return resp
 
 
 def _battery_context(key: str, log: str) -> dict:
@@ -240,6 +302,63 @@ def photos_delete(request: Request, photo_id: list[int] = Form([])):
         raise FormError("nothing selected")
     for pid in photo_id:
         photos.delete(pid)
+    return back(request)
+
+
+def _picked(conn, photo_id: list[int]) -> list:
+    if not photo_id:
+        raise FormError("nothing selected")
+    rows = [db.photo(conn, pid) for pid in photo_id]
+    return [r for r in rows if r]
+
+
+@router.post("/ui/photos/playlist")
+def photos_playlist(request: Request, photo_id: list[int] = Form([]), playlist: str = Form(""),
+                    new_playlist: str = Form(""), action: str = Form("add")):
+    """Bulk add the selection to a playlist (appended in page order, skipping
+    ones already in it), or remove it. playlist=new creates one named new_playlist."""
+    with db.tx() as conn:
+        picked = _picked(conn, photo_id)
+        if playlist == "new" and action == "add":
+            name = " ".join(new_playlist.split())
+            if not name:
+                raise FormError("name the new playlist")
+            plid = conn.execute("INSERT INTO playlists (name, created_at) VALUES (?, ?)",
+                                (name, datetime.now(timezone.utc).isoformat())).lastrowid
+        elif playlist.isdigit() and db.playlist(conn, int(playlist)):
+            plid = int(playlist)
+        else:
+            raise FormError("choose a playlist")
+        if action == "remove":
+            conn.executemany("DELETE FROM playlist_items WHERE playlist_id = ? AND photo_id = ?",
+                             [(plid, p["id"]) for p in picked])
+            return back(request)
+        have = {r[0] for r in conn.execute("SELECT photo_id FROM playlist_items WHERE playlist_id = ?", (plid,))}
+        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?",
+                           (plid,)).fetchone()[0]
+        for p in picked:
+            if p["id"] not in have:
+                conn.execute("INSERT INTO playlist_items (device_id, photo_id, position, playlist_id) "
+                             "VALUES ('', ?, ?, ?)", (p["id"], pos, plid))
+                pos += 1
+    return back(request)
+
+
+@router.post("/ui/photos/tag")
+def photos_tag(request: Request, photo_id: list[int] = Form([]), tag: str = Form(""), action: str = Form("add")):
+    """Bulk add or remove tags (comma-separated) on the selection's sidecars."""
+    tags = sidecar.normalize_tags(tag)
+    if not tags:
+        raise FormError("enter a tag")
+    with db.tx() as conn:
+        picked = _picked(conn, photo_id)
+    for p in picked:
+        if p["kind"] == "dashboard":
+            continue
+        meta = sidecar.read(p)
+        meta["tags"] = ([t for t in meta["tags"] if t not in tags] if action == "remove"
+                        else meta["tags"] + [t for t in tags if t not in meta["tags"]])
+        sidecar.write(p, meta)
     return back(request)
 
 

@@ -52,14 +52,35 @@
 </div>
 {% endif %}
 
+{% if single %}
+<p><a href="?" onclick="if (history.length > 1) { history.back(); return false; }">← Back to {{ source_name }}</a></p>
+<p class="muted">Click the photo to set its crop focal point. <b>Sim</b> shows it as the chosen frame would display it.</p>
+{% else %}
+<form method="get" class="row filters">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="Search title, place, artist, tags…" size="28">
+  <select name="pl" onchange="this.form.submit()">
+    <option value="">Any playlist</option>
+    <option value="none" {{ "selected" if filters.pl == "none" }}>Not in a playlist</option>
+    {% for pl in all_playlists %}<option value="{{ pl.id }}" {{ "selected" if filters.pl == pl.id|string }}>In: {{ pl.name }}</option>{% endfor %}
+  </select>
+  <select name="shape" onchange="this.form.submit()">{% for v, l in shapes %}<option value="{{ v }}" {{ "selected" if filters.shape == v }}>{{ l }}</option>{% endfor %}</select>
+  <select name="sort" onchange="this.form.submit()">{% for v, l in sorts %}<option value="{{ v }}" {{ "selected" if filters.sort == v }}>{{ l }}</option>{% endfor %}</select>
+  {% if filters.tag %}<input type="hidden" name="tag" value="{{ filters.tag }}">{% endif %}
+  <button>Search</button>
+  {% if filtered %}<a href="?{{ 'sort=' ~ filters.sort if filters.sort != 'new' }}">Clear filters</a>{% endif %}
+  <span class="viewtoggle">View:
+    {% if view == "compact" %}<b>Compact</b>{% else %}<a href="{{ qs(view='compact') }}">Compact</a>{% endif %} ·
+    {% if view == "full" %}<b>Full cards</b>{% else %}<a href="{{ qs(view='full') }}">Full cards</a>{% endif %}</span>
+</form>
 {% if tag_counts %}
 <div class="row tagbar">Tags:
-  <a href="?" class="chip {{ 'on' if not tag }}">all</a>
-  {% for t in tag_counts %}<a href="?tag={{ t.tag|urlencode }}" class="chip {{ 'on' if t.tag == tag }}">{{ t.tag }} ({{ t.n }})</a>{% endfor %}
+  <a href="{{ qs(tag='') }}" class="chip {{ 'on' if not tag }}">all</a>
+  {% for t in tag_counts %}<a href="{{ qs(tag=t.tag) }}" class="chip {{ 'on' if t.tag == tag }}">{{ t.tag }} ({{ t.n }})</a>{% endfor %}
 </div>
 {% endif %}
-<p class="muted">{{ photos|length }} photo{{ "s" if photos|length != 1 }}{% if tag %} tagged <b>{{ tag }}</b>{% endif %}.
-  Click a photo to set its crop focal point. <b>Sim</b> shows it as the chosen frame would display it.</p>
+<p class="muted">{{ photos|length }}{% if photos|length != total or filtered %} of {{ total }}{% endif %} photo{{ "s" if total != 1 }}{% if tag %} tagged <b>{{ tag }}</b>{% endif %}.
+  {% if view == "compact" %}<b>Edit…</b> opens a photo's full card (info, tuning, focal point, Sim).{% else %}Click a photo to set its crop focal point. <b>Sim</b> shows it as the chosen frame would display it.{% endif %}</p>
+{% endif %}
 {% include "_photo_grid.html" %}
 </body>
 </html>

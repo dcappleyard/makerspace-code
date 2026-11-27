@@ -1,18 +1,47 @@
 {# Photo cards for a source page. Needs: photos, metas, in_playlists, devices,
-   all_playlists, fields, labels, tuning_keys, json. #}
+   all_playlists, fields, labels, tuning_keys, json. Optional (source pages):
+   view ("compact" | "full"), qs (query-string helper), tag_counts, shape_of. #}
+{% set compact = view is defined and view == "compact" %}
+{% macro tag_href(t) %}{{ qs(tag=t) if qs is defined else "?tag=" ~ (t|urlencode) }}{% endmacro %}
 {% if photos %}
-<form id="bulk" method="post" action="/ui/photos/delete"
-      onsubmit="return confirm('Delete ' + pickedCount() + ' photo(s)? Photos from a folder source (e.g. the photobooth) are deleted from its folder too. This can\'t be undone.')"></form>
+<form id="bulk" method="post" action="/ui/photos/delete" onsubmit="rememberPicks()"></form>
 <div class="row bulkbar">
   <label><input type="checkbox" id="pick-all" onchange="pickAll(this.checked)"> Select all {{ photos|length }}</label>
-  <span id="pick-count" class="muted">0 selected</span>
-  <button form="bulk" id="pick-delete" disabled>Delete selected</button>
-  <button type="button" onclick="pickAll(false)">Clear</button>
-  <span class="muted">Shift-click to select a range.</span>
+  <b id="pick-count" class="muted">0 selected</b>
+  <span class="grp"><span class="ctl">Playlist</span>
+    <select form="bulk" name="playlist" onchange="newPlaylist(this)">
+      <option value="">choose…</option>
+      {% for pl in all_playlists %}<option value="{{ pl.id }}">{{ pl.name }}</option>{% endfor %}
+      <option value="new">+ New playlist…</option>
+    </select>
+    <input type="hidden" form="bulk" name="new_playlist">
+    <button form="bulk" class="needs-pick" formaction="/ui/photos/playlist" name="action" value="add">Add</button>
+    <button form="bulk" class="needs-pick" formaction="/ui/photos/playlist" name="action" value="remove">Remove</button></span>
+  <span class="grp"><span class="ctl">Tag</span>
+    <input form="bulk" name="tag" list="tag-list" size="12" placeholder="tag, tag">
+    <datalist id="tag-list">{% for t in tag_counts|default([]) %}<option value="{{ t.tag }}">{% endfor %}</datalist>
+    <button form="bulk" class="needs-pick" formaction="/ui/photos/tag" name="action" value="add">Add</button>
+    <button form="bulk" class="needs-pick" formaction="/ui/photos/tag" name="action" value="remove">Remove</button></span>
+  <span class="grp"><button form="bulk" class="needs-pick" id="pick-delete" formaction="/ui/photos/delete"
+          onclick="return confirm('Delete ' + pickedCount() + ' photo(s)? Photos from a folder source (e.g. the photobooth) are deleted from its folder too. This can\'t be undone.')">Delete selected</button>
+    <button type="button" onclick="pickAll(false)">Clear</button></span>
+  <span class="muted">{{ "Click photos" if compact else "Tick photos" }} to select; shift-click for a range.</span>
 </div>
 {% endif %}
-<div class="grid">
+<div class="grid{{ ' compact' if compact }}">
 {% for p in photos %}{% set m = metas[p.id] %}
+{% if compact %}
+  <div class="card tile">
+    <label class="pick-over"><input type="checkbox" form="bulk" name="photo_id" value="{{ p.id }}" onclick="picked(event, this)"></label>
+    <img src="/ui/thumb/{{ p.id }}" alt="{{ p.filename }}" loading="lazy" onclick="tileClick(event, this)">
+    <div class="tile-title" title="#{{ p.id }} {{ p.filename }}">{{ m.title or p.filename }}</div>
+    {% set shape = dict(shapes|default([]))[shape_of(p)] if shape_of is defined and shape_of(p) else "" %}
+    <div class="meta-sub">{{ [m.date, m.location, shape]|select|join(" · ") or "—" }}</div>
+    {% if p.id in in_playlists %}<div>{% for pid, name in in_playlists[p.id] %}<a href="/playlist/{{ pid }}" class="chip pl">▶ {{ name }}</a>{% endfor %}</div>{% endif %}
+    {% if m.tags %}<div>{% for t in m.tags %}<a href="{{ tag_href(t) }}" class="chip">{{ t }}</a>{% endfor %}</div>{% endif %}
+    <a href="?id={{ p.id }}" class="small">Edit…</a>
+  </div>
+{% else %}
   <div class="card">
     <label class="pick"><input type="checkbox" form="bulk" name="photo_id" value="{{ p.id }}" onclick="picked(event, this)"> select</label>
     <form method="post" action="/ui/photo/{{ p.id }}/focal" class="focal" onclick="setFocal(event, this)">
@@ -24,7 +53,7 @@
     {% set left = [m.title, m.location, m.film]|select|join(" · ") %}{% set right = [m.artist, m.date]|select|join(" ‡ ") %}
     {% if left %}<div class="meta-title">{{ left }}</div>{% endif %}
     {% if right %}<div class="meta-sub">{{ right }}</div>{% endif %}
-    {% if m.tags %}<div class="row">{% for t in m.tags %}<a href="?tag={{ t|urlencode }}" class="chip">{{ t }}</a>{% endfor %}</div>{% endif %}
+    {% if m.tags %}<div class="row">{% for t in m.tags %}<a href="{{ tag_href(t) }}" class="chip">{{ t }}</a>{% endfor %}</div>{% endif %}
     {% if p.id in in_playlists %}<div class="muted">In: {% for pid, name in in_playlists[p.id] %}<a href="/playlist/{{ pid }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
 
     {% set in_ids = (in_playlists.get(p.id) or [])|map(attribute=0)|list %}
@@ -66,6 +95,7 @@
     <form method="post" action="/ui/photo/{{ p.id }}/delete"
           onsubmit="return confirm('Delete this photo{% if p.rel_path %} (and its file in the source folder){% endif %}?')"><button>Delete</button></form>
   </div>
+{% endif %}
 {% else %}<p class="muted">No photos here yet.</p>{% endfor %}
 </div>
 <script>
@@ -77,7 +107,8 @@ function pickUpdate() {
   const count = document.getElementById('pick-count'), del = document.getElementById('pick-delete'), all = document.getElementById('pick-all');
   if (!count) return;
   count.textContent = n + ' selected';
-  del.disabled = n === 0;
+  count.classList.toggle('muted', n === 0);
+  document.querySelectorAll('.needs-pick').forEach(b => b.disabled = n === 0);
   del.textContent = n ? 'Delete ' + n + ' selected' : 'Delete selected';
   all.checked = n > 0 && n === boxes.length;
   all.indeterminate = n > 0 && n < boxes.length;
@@ -93,8 +124,31 @@ function picked(ev, box) {
   lastPick = box;
   pickUpdate();
 }
-// Browsers can restore checked boxes on back/forward; count them on load.
-window.addEventListener('pageshow', pickUpdate);
+// Compact tiles: clicking the photo toggles its selection.
+function tileClick(ev, img) {
+  const box = img.closest('.card').querySelector('input[name=photo_id]');
+  box.checked = !box.checked;
+  picked(ev, box);
+}
+function newPlaylist(sel) {
+  if (sel.value !== 'new') return;
+  const name = (prompt('New playlist name') || '').trim();
+  const opt = sel.querySelector('option[value=new]');
+  if (!name) { sel.value = ''; opt.textContent = '+ New playlist…'; return; }
+  document.querySelector('input[name=new_playlist][form=bulk]').value = name;
+  opt.textContent = '+ New: ' + name;
+}
+// Keep the selection across a bulk action (e.g. add to a playlist, then tag the same photos).
+function rememberPicks() {
+  sessionStorage.setItem('repick:' + location.pathname,
+    JSON.stringify(pickBoxes().filter(b => b.checked).map(b => b.value)));
+}
+window.addEventListener('pageshow', () => {
+  const key = 'repick:' + location.pathname, ids = JSON.parse(sessionStorage.getItem(key) || 'null');
+  sessionStorage.removeItem(key);
+  if (ids) pickBoxes().forEach(b => b.checked = ids.includes(b.value));
+  pickUpdate();    // also counts boxes the browser restored on back/forward
+});
 function setFocal(ev, form) {
   const r = form.querySelector("img").getBoundingClientRect();
   form.x.value = ((ev.clientX - r.left) / r.width).toFixed(3);
