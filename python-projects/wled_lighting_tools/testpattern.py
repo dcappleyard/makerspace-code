@@ -16,6 +16,11 @@ Patterns stream until Ctrl-C; WLED returns to its own effect ~2.5 s later.
   blank                all pixels black (until Ctrl-C)
 
 Host comes from config.yaml (copy config.example.yaml) or --host.
+
+--tree works on the tree strand instead (the optional add-on fixture: tree.host
+from the config, tree_pixels.csv from tree_map.py). Use `step` to find the
+split and the two top corners for tree_map.py's TREE_ANCHORS; `parts` then
+shows trunk brown, left side blue, top red, right side orange.
 """
 import argparse
 import colorsys
@@ -25,13 +30,27 @@ import time
 from pathlib import Path
 
 import pixel_map
+import tree_map
+from layout import tree_config
 from wled.api import WLED
 from wled.ddp import DDPSender, Streamer
 
 HERE = Path(__file__).resolve().parent
 
-PART_COLORS = {"stem": (255, 120, 0), "ring": (0, 60, 255), "rod": (255, 255, 255)}
+PART_COLORS = {"stem": (255, 120, 0), "ring": (0, 60, 255), "rod": (255, 255, 255),
+               "trunk": (140, 70, 20), "left": (0, 60, 255), "top": (255, 0, 0), "right": (255, 120, 0)}
 OUTPUT_COLORS = {1: (255, 0, 0), 2: (0, 255, 0)}
+
+
+def default_config():
+    """$WLED_CONFIG, else config.yaml here, else data/config.yaml (the Docker
+    machine config on the Pi)."""
+    env = os.environ.get("WLED_CONFIG")
+    if env:
+        return env
+    local = HERE / "config.yaml"
+    return str(local if local.exists() or not (HERE / "data" / "config.yaml").exists()
+               else HERE / "data" / "config.yaml")
 
 
 def load_config(path):
@@ -42,6 +61,8 @@ def load_config(path):
 
 
 def describe(p):
+    if "strand" not in p:                  # the tree strand
+        return f"tree light {p['light']:3d} | {p['part']:5s} | {p['s']:6.1f} in along"
     return (f"pixel {p['index']:3d} | output {p['output']} light {p['light']:3d} | "
             f"{p['strand']} bp {p['base_pair']} {p['part']} slot {p['slot']}")
 
@@ -83,10 +104,11 @@ def main():
     ap.add_argument("pattern", choices=["info", "power", "rgb", "solid", "outputs", "parts",
                                         "basepairs", "chase", "step", "ramp", "blank"])
     ap.add_argument("args", nargs="*", help="pattern arguments (power: on|off; solid: R G B)")
-    ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
-                    help="config file (default: $WLED_CONFIG, else config.yaml here)")
+    ap.add_argument("--config", default=default_config(),
+                    help="config file (default: $WLED_CONFIG, else config.yaml here, else data/config.yaml)")
     ap.add_argument("--host", help="WLED host or IP (overrides config)")
-    ap.add_argument("--pixels", default=str(HERE / "pixels.csv"))
+    ap.add_argument("--pixels", help="pixel map (default pixels.csv, or tree_pixels.csv with --tree)")
+    ap.add_argument("--tree", action="store_true", help="the tree strand instead of the sculpture")
     ap.add_argument("--fps", type=float, help="stream rate (default from config, else 40)")
     ap.add_argument("--scale", type=float, default=0.5,
                     help="brightness scale applied to every pattern, 0-1 (default 0.5)")
@@ -98,8 +120,17 @@ def main():
     ap.add_argument("--period", type=float, default=10.0, help="ramp: seconds per up+down cycle")
     a = ap.parse_args()
 
-    cfg = load_config(Path(a.config)).get("wled", {})
+    full = load_config(Path(a.config))
+    cfg = full.get("wled", {})
     host = a.host or cfg.get("host")
+    if a.tree:
+        tc = tree_config(full) or {}
+        host = a.host or tc.get("host")
+        cfg = {**cfg, "ddp_port": tc.get("ddp_port", 4048)}
+        if not host:
+            sys.exit("No tree host: add a tree: block with host: to config.yaml (see config.example.yaml) or pass --host")
+        if a.pattern in ("outputs", "basepairs"):
+            sys.exit(f"'{a.pattern}' is for the sculpture, not the tree")
     if not host:
         sys.exit("No WLED host: set wled.host in config.yaml (see config.example.yaml) or pass --host")
     fps = a.fps or cfg.get("fps", 40)
@@ -108,7 +139,7 @@ def main():
         info = WLED(host).info()
         leds = info.get("leds", {})
         print(f"{info.get('name')}  WLED {info.get('ver')}  ip {info.get('ip')}")
-        print(f"LED count: {leds.get('count')}  (pixel map expects 200)")
+        print(f"LED count: {leds.get('count')}  (pixel map expects {tree_map.N_LIGHTS if a.tree else 200})")
         print(f"power limiter: {leds.get('maxpwr')} mA  est. current: {leds.get('pwr')} mA")
         print(f"realtime active: {info.get('live')}  mode: {info.get('lm')}  source: {info.get('lip')}")
         st = WLED(host).state()
@@ -125,7 +156,10 @@ def main():
         print(f"on={st.get('on')} bri={st.get('bri')}")
         return
 
-    pixels = pixel_map.load(a.pixels)
+    if a.tree:
+        pixels = tree_map.load(a.pixels or tree_map.HERE / "tree_pixels.csv")
+    else:
+        pixels = pixel_map.load(a.pixels or HERE / "pixels.csv")
     n = len(pixels)
     F = Frame(n, max(0.0, min(1.0, a.scale)))
     sender = DDPSender(host, cfg.get("ddp_port", 4048))
@@ -173,7 +207,8 @@ def main():
 
     elif a.pattern == "parts":
         frame = F.colors([PART_COLORS[p["part"]] for p in pixels])
-        print("  stems ORANGE, rings BLUE, rods WHITE")
+        print("  trunk BROWN, left side BLUE, top RED, right side ORANGE" if a.tree
+              else "  stems ORANGE, rings BLUE, rods WHITE")
         run(Streamer(sender, lambda: frame, fps))
 
     elif a.pattern == "basepairs":
@@ -182,7 +217,7 @@ def main():
         run(Streamer(sender, lambda: frame, fps))
 
     elif a.pattern in ("chase", "step"):
-        order = [p for p in pixels if a.output in (None, p["output"])]
+        order = [p for p in pixels if a.output in (None, p.get("output"))]
         pos = next((i for i, p in enumerate(order) if p["index"] >= a.start), 0)
         state = {"pos": pos, "shown": None}
         frames = {}

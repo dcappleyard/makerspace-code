@@ -12,3 +12,11 @@ location:                      # for sunrise/sunset (astral)
   latitude: 43.07
   longitude: -89.40
   timezone: America/Chicago
+
+# Optional add-on: a second Dig-Uno with the tree strand (tree_map.py -> tree_pixels.csv).
+# Effects with a tree companion (render_tree) play on it too; others leave it dark.
+# Leave the tree's WLED off; the runner streams to it during windows. Delete the
+# block (or leave it commented) to run the sculpture alone.
+# tree:
+#   host: 192.168.1.51         # IP of the tree's Dig-Uno
+#   ddp_port: 4048

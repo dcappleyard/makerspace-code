@@ -2,21 +2,26 @@
 // Shared 3D canvas view of the sculpture (plain script, defines global SculptureView).
 // Used by preview/index.html and the web dashboard. No dependencies.
 //
-//   const view = new SculptureView(canvas, pixels, { tooltip: el | null });
-//   view.setFrame(rgb)   view.setDim(bool)   view.setView("front"|"iso"|"top")
+//   const view = new SculptureView(canvas, pixels, { tooltip: el | null, tree: treePixels | null });
+//   view.setFrame(rgb)   view.setTreeFrame(rgb | null)   view.setDim(bool)   view.setView("front"|"iso"|"top")
 //   view.setSpin(bool)   view.resize()       view.setOptions({structure, unlit, exposure})
 //
 // Tooltip markup uses .sw (swatch) and .muted classes from the host page's CSS.
+// tree: the optional tree strand (/api/tree-pixels, same world inches), drawn
+// beside the sculpture; its colors come from setTreeFrame.
 class SculptureView {
   static VIEWS = { front: [0, 0.08], iso: [0.6, 0.35], top: [0, Math.PI / 2 - 0.001] };
   static D = 160; // camera distance, inches
 
-  constructor(canvas, pixels, { tooltip = null } = {}) {
+  constructor(canvas, pixels, { tooltip = null, tree = null } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.tip = tooltip;
-    this.pixels = pixels;
-    this.colors = new Uint8Array(3 * pixels.length);
+    this.n = pixels.length;
+    this.tree = tree || [];
+    // sculpture lights first, then the tree's; one color buffer for both
+    this.pixels = pixels.concat(this.tree.map(p => ({ ...p, tree: true })));
+    this.colors = new Uint8Array(3 * this.pixels.length);
     this.dim = true;   // idle until the host says the stream is live
     this.cam = { az: 0.6, el: 0.35, zoom: 1, spin: false };
     this.opts = { structure: true, unlit: true, exposure: 1.2 };
@@ -30,7 +35,12 @@ class SculptureView {
   }
 
   // ---------------------------------------------------------------- public API
-  setFrame(rgb) { this.colors = rgb; }
+  setFrame(rgb) { this.colors.set(rgb.length > 3 * this.n ? rgb.subarray(0, 3 * this.n) : rgb); }
+  setTreeFrame(rgb) {
+    if (!this.tree.length) return;
+    if (rgb) this.colors.set(rgb.subarray(0, 3 * this.tree.length), 3 * this.n);
+    else this.colors.fill(0, 3 * this.n);
+  }
   setDim(on) { this.dim = !!on; }
   setSpin(on) { this.cam.spin = !!on; }
   setView(name) {
@@ -49,7 +59,7 @@ class SculptureView {
 
   // ---------------------------------------------------------------- geometry
   buildStructure() {
-    const pixels = this.pixels, groups = new Map();
+    const pixels = this.pixels.slice(0, this.n), groups = new Map();
     for (const p of pixels) {
       if (p.part !== "ring") continue;
       const k = p.output + ":" + p.base_pair;
@@ -67,10 +77,16 @@ class SculptureView {
       stems.push([[0, 0, c[2]], [c[0] - ux * r, c[1] - uy * r, c[2]]]);
     }
     const ztop = Math.max(...pixels.map(p => p.z)) + 3;
-    this.structure = { rings, stems, rod: [[0, 0, 0], [0, 0, ztop]] };
-    this.zc = ztop / 2;                  // frame ground (z=0) to the top of the rod
+    // the tree: a line through its lights, from the ground at the trunk
+    const tree = this.tree.slice().sort((a, b) => a.light - b.light);
+    const branch = tree.length ? [[tree[0].x, tree[0].y, 0], ...tree.map(p => [p.x, p.y, p.z])] : [];
+    this.structure = { rings, stems, rod: [[0, 0, 0], [0, 0, ztop]], branch };
     const rmax = Math.max(...pixels.map(p => Math.hypot(p.x, p.y)));
-    this.extent = Math.max(ztop, 2 * rmax) * 1.25;
+    const xs = [-rmax, rmax, ...tree.map(p => p.x)];
+    const zt = Math.max(ztop, ...tree.map(p => p.z + 3));
+    this.xc = (Math.min(...xs) + Math.max(...xs)) / 2;   // frame the sculpture and the tree
+    this.zc = zt / 2;                    // frame ground (z=0) to the top
+    this.extent = Math.max(zt, Math.max(...xs) - Math.min(...xs)) * 1.25;
   }
 
   // ---------------------------------------------------------------- camera
@@ -78,6 +94,7 @@ class SculptureView {
     const cam = this.cam, D = SculptureView.D;
     const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
     const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+    x -= this.xc || 0;
     const x1 = x * ca + y * sa, y1 = -x * sa + y * ca, zz = z - this.zc;
     const up = zz * ce + y1 * se;
     const depth = y1 * ce - zz * se;
@@ -117,6 +134,7 @@ class SculptureView {
       ctx.beginPath();
       this.line3(...st.rod);
       for (const s of st.stems) this.line3(...s);
+      for (let i = 1; i < st.branch.length; i++) this.line3(st.branch[i - 1], st.branch[i]);
       for (const { c, r } of st.rings) {
         for (let i = 0; i <= 40; i++) {
           const a = i / 40 * 2 * Math.PI;
@@ -219,9 +237,12 @@ class SculptureView {
     if (!tip) return;
     const p = this.pixels[best], k = 3 * best, colors = this.colors;
     const rgb = [colors[k] || 0, colors[k + 1] || 0, colors[k + 2] || 0];
-    tip.innerHTML = `<span class="sw" style="background:rgb(${rgb})"></span>` +
-      `<b>#${p.index}</b> · output ${p.output} light ${p.light}<br>` +
-      `<span class="muted">${p.strand} · bp ${p.base_pair} · ${p.part} slot ${p.slot} · rgb(${rgb.join(", ")})</span>`;
+    tip.innerHTML = p.tree
+      ? `<span class="sw" style="background:rgb(${rgb})"></span><b>tree light ${p.light}</b><br>` +
+        `<span class="muted">${p.part} · ${p.s.toFixed(0)} in along · rgb(${rgb.join(", ")})</span>`
+      : `<span class="sw" style="background:rgb(${rgb})"></span>` +
+        `<b>#${p.index}</b> · output ${p.output} light ${p.light}<br>` +
+        `<span class="muted">${p.strand} · bp ${p.base_pair} · ${p.part} slot ${p.slot} · rgb(${rgb.join(", ")})</span>`;
     tip.style.display = "block";
     const tw = tip.offsetWidth, th = tip.offsetHeight;   // tooltip is position: fixed (viewport coords)
     tip.style.left = Math.max(8, Math.min(window.innerWidth - tw - 8, cx + 14)) + "px";

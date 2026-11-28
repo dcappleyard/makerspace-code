@@ -30,7 +30,7 @@ import numpy as np
 
 import effects
 import program
-from layout import Layout
+from layout import Layout, TreeLayout, tree_config
 from schedule import Interval, Schedule
 from shows import load_shows, parse_entries
 from testpattern import load_config
@@ -48,15 +48,20 @@ OFF_BLACK = 0.3          # ... then keep sending black this long, so the LEDs la
 
 class Mixer:
     """Frame source for the Streamer: the current show, crossfading from the
-    previous one. Returns None while a WLED preset runs (nothing is sent)."""
+    previous one. Returns None while a WLED preset runs (nothing is sent).
 
-    def __init__(self, n):
-        self.n = n
+    With a tree fixture (tree_n > 0) it returns (sculpture frame or None, tree
+    frame) instead: the tree is streamed all through a window, black whenever
+    the effect has no tree companion (and during WLED presets), so it stays dark."""
+
+    def __init__(self, n, tree_n=0):
+        self.n, self.tree_n = n, tree_n
         self.lock = threading.Lock()
         self.cur = self.prev = None
         self.fade_start, self.fade_s = 0.0, 0.0
         self._logged_error = None
-        self.last = None             # last frame sent (bytes), for the dashboard's live view
+        self.last = None             # last sculpture frame sent (bytes), for the dashboard's live view
+        self.last_tree = None        # last tree frame sent (bytes), or None
         self.out_start = None        # fade_out(): when it began, and how long it takes
         self.out_s = 0.0
 
@@ -80,29 +85,39 @@ class Mixer:
                 if p is not None:
                     p.scale = scale
 
+    def _tree_of(self, player):
+        if player is not None and player.tree_last is not None and len(player.tree_last) == 3 * self.tree_n:
+            return player.tree_last
+        return bytes(3 * self.tree_n)
+
     def __call__(self):
         with self.lock:
             cur, prev = self.cur, self.prev
+            tree = self.tree_n > 0
             if cur is None:
-                return None
-            f = cur.frame()
-            self._log_error(cur)
-            if prev is not None:
-                a = (time.monotonic() - self.fade_start) / self.fade_s
-                if a >= 1:
-                    self.prev = None
-                else:
-                    x = np.frombuffer(f, np.uint8).astype(np.float32)
-                    y = np.frombuffer(prev.frame(), np.uint8).astype(np.float32)
-                    f = (y + (x - y) * a + 0.5).astype(np.uint8).tobytes()
+                if not tree:
+                    return None
+                f, t = None, bytes(3 * self.tree_n)
+            else:
+                f = cur.frame()
+                t = self._tree_of(cur) if tree else None
+                self._log_error(cur)
+                if prev is not None:
+                    a = (time.monotonic() - self.fade_start) / self.fade_s
+                    if a >= 1:
+                        self.prev = None
+                    else:
+                        pf = prev.frame()
+                        f = _blend(pf, f, a)
+                        if tree:
+                            t = _blend(self._tree_of(prev), t, a)
             if self.out_start is not None:
                 g = 1.0 - (time.monotonic() - self.out_start) / self.out_s
-                if g <= 0:
-                    f = bytes(len(f))
-                else:
-                    f = (np.frombuffer(f, np.uint8).astype(np.float32) * g + 0.5).astype(np.uint8).tobytes()
+                f = _dim(f, g)
+                t = _dim(t, g)
             self.last = f
-            return f
+            self.last_tree = t
+            return (f, t) if tree else f
 
     def _log_error(self, player):
         if player.error != self._logged_error:
@@ -111,24 +126,51 @@ class Mixer:
                 log.warning("effect %s: %s", player.name, player.error)
 
 
-class Fanout:
-    """Send to several DDP targets; network errors are logged, not fatal."""
+def _blend(a, b, x):
+    """a -> b by x (0..1), frames as bytes."""
+    y = np.frombuffer(a, np.uint8).astype(np.float32)
+    z = np.frombuffer(b, np.uint8).astype(np.float32)
+    return (y + (z - y) * x + 0.5).astype(np.uint8).tobytes()
 
-    def __init__(self, senders):
+
+def _dim(f, g):
+    if f is None:
+        return None
+    if g <= 0:
+        return bytes(len(f))
+    return (np.frombuffer(f, np.uint8).astype(np.float32) * g + 0.5).astype(np.uint8).tobytes()
+
+
+class Fanout:
+    """Send to several DDP targets; network errors are logged, not fatal.
+    send() takes a frame, or (sculpture frame or None, tree frame) from a
+    Mixer with a tree; the tree frame goes to the tree sender, if there is one."""
+
+    def __init__(self, senders, tree=None):
         self.senders = senders
-        self._last_err = 0.0
+        self.tree = tree
+        self._last_err = {}
 
     def send(self, data):
-        for s in self.senders:
-            try:
-                s.send(data)
-            except OSError as e:
-                if time.monotonic() - self._last_err > RETRY:
-                    self._last_err = time.monotonic()
-                    log.warning("DDP send to %s failed: %s", s.addr[0], e)
+        if isinstance(data, tuple):
+            data, tree = data
+            if tree is not None and self.tree is not None:
+                self._send(self.tree, tree)
+        if data is not None:
+            for s in self.senders:
+                self._send(s, data)
+
+    def _send(self, s, data):
+        try:
+            s.send(data)
+        except OSError as e:
+            host = s.addr[0]
+            if time.monotonic() - self._last_err.get(host, -RETRY) > RETRY:
+                self._last_err[host] = time.monotonic()
+                log.warning("DDP send to %s failed: %s", host, e)
 
     def close(self):
-        for s in self.senders:
+        for s in self.senders + ([self.tree] if self.tree else []):
             s.close()
 
 
@@ -178,7 +220,21 @@ class Runner:
         self.api = None if args.preview else WLED(host if api_port == 80 else f"{host}:{api_port}")
 
         self.layout = Layout.load()
-        self.mixer = Mixer(self.layout.n)
+        # The tree strand: an optional add-on fixture, on only with a tree: block
+        # in the machine config. In --preview it's drawn on the dashboard, not sent.
+        self.tree_cfg = tree_config(self.machine_cfg)
+        self.tree = None
+        if self.tree_cfg:
+            try:
+                self.tree = TreeLayout.load()
+            except OSError as e:
+                log.warning("tree: configured but no tree map (%s); running without it", e)
+                self.tree_cfg = None
+        tc = self.tree_cfg
+        self.tree_api = (WLED(tc["host"] if tc["api_port"] == 80 else f"{tc['host']}:{tc['api_port']}")
+                         if tc and not args.preview else None)
+        self.tree_health = {"reachable": None, "error": None, "checked": None, "info": None} if self.tree_api else None
+        self.mixer = Mixer(self.layout.n, self.tree.n if self.tree is not None else 0)
         self.set_show(self.default_show, quiet=True)
         self.streamer = None
         self.fanout = None
@@ -282,7 +338,7 @@ class Runner:
         log.info("window on: %s -> %s (%s)", fmt(win.start), fmt(win.end), win.show)
         self.pending.pop("off", None)
         self.api_call("on", "on", **self._on_state())
-        self.fanout = Fanout(senders)
+        self.fanout = Fanout(senders, self._tree_sender())
         self.streamer = Streamer(self.fanout, self.mixer, self.fps)
         self.streamer.start()
         self.set_show(win.show)
@@ -305,6 +361,27 @@ class Runner:
         self.pending.pop("preset", None)
         # leave realtime mode now (not after its timeout), and switch off with no transition
         self.api_call("off", "off", on=False, live=False, tt=0)
+        self._release_tree()
+
+    def _tree_sender(self):
+        """DDP sender for the tree, or None (no tree, --preview, or it can't be resolved)."""
+        if self.tree is None or self.preview:
+            return None
+        try:
+            return DDPSender(self.tree_cfg["host"], self.tree_cfg["ddp_port"])
+        except OSError as e:
+            log.warning("tree: can't resolve %s (%s); the sculpture plays without it", self.tree_cfg["host"], e)
+            return None
+
+    def _release_tree(self):
+        """Best effort, no retries: let the tree leave realtime mode now, back
+        to its own state (left off). The runner never turns it on or off."""
+        if self.tree_api is None:
+            return
+        try:
+            self.tree_api.set_state(live=False)
+        except Exception as e:
+            log.info("tree: release failed (%s); it times out of realtime by itself", e)
 
     def stop_streaming(self):
         if self.streamer:
@@ -361,7 +438,7 @@ class Runner:
             return True
         if e.kind == "effect":
             try:
-                player = effects.Player(e.name, self.layout, scale=self.scale, options=e.options)
+                player = effects.Player(e.name, self.layout, scale=self.scale, options=e.options, tree=self.tree)
             except Exception as ex:
                 log.error("effect %s failed to load: %s", e.name, ex)
                 return False
@@ -385,6 +462,9 @@ class Runner:
             log.info("show %s%s: %s", sh.name, " (default)" if sh.name == self.default_show else "",
                      ", ".join(map(str, sh.entries)))
         log.info("targets: %s%s", ", ".join(self.targets), " (preview: no WLED API)" if self.preview else "")
+        if self.tree is not None:
+            log.info("tree: %s, %d lights%s", self.tree_cfg["host"], self.tree.n,
+                     " (preview: drawn on the dashboard, not sent)" if self.preview else "")
         if not self.args.force_on:
             nxt = self.schedule.active() or self.schedule.next_start()
             if nxt:
@@ -419,6 +499,8 @@ class Runner:
         # Shutdown mid-window: just stop streaming; WLED falls back to its own effect.
         self.mixer.switch(None)
         self.stop_streaming()
+        if self.window is not None:
+            self._release_tree()
         log.info("stopped")
 
     def effective_window(self):
@@ -641,6 +723,15 @@ class Runner:
             except Exception as e:
                 h.update(reachable=False, error=str(e), info=self.wled_health.get("info"))
             self.wled_health = h
+            if self.tree_api is not None:
+                th = {"checked": h["checked"]}
+                try:
+                    i = self.tree_api.info()
+                    th.update(reachable=True, error=None,
+                              info={k: i.get(k) for k in ("name", "ver", "ip")} | {"leds": i.get("leds", {}).get("count")})
+                except Exception as e:
+                    th.update(reachable=False, error=str(e), info=(self.tree_health or {}).get("info"))
+                self.tree_health = th
             self.stopping.wait(60)
 
     def peek_next(self):
@@ -694,6 +785,9 @@ class Runner:
             "scale": self.scale,
             "brightness": self.bri,
             "targets": self.targets,
+            "tree": ({"host": self.tree_cfg["host"], "lights": self.tree.n, "health": self.tree_health,
+                      "companion": bool(self.mixer.cur is not None and self.mixer.cur.has_tree)}
+                     if self.tree is not None else None),
             "wled": self.wled_health,
             "pending": [d for _, d, _ in self.pending.values()],
             "streaming": self.streamer is not None and self.mixer.cur is not None,

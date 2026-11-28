@@ -26,6 +26,7 @@ const Preview = (() => {
         showMsg("audErr", m.error || "");
       }
       if (m.frame) { view.setFrame(decode(m.frame)); view.setDim(false); } else view.setDim(true);
+      view.setTreeFrame(m.tree ? decode(m.tree) : null);
     };
     es.onerror = () => { $("liveChip").textContent = "reconnecting…"; };
   }
@@ -54,7 +55,7 @@ const Preview = (() => {
     const v = $("audItem").value;
     for (const k of Object.keys(audOpts)) delete audOpts[k];
     const fx = effectByName(v);
-    $("audDesc").textContent = v.startsWith("show:") ? "Plays the saved show's effects in order, with its crossfades." : (fx ? fx.description : "");
+    $("audDesc").textContent = v.startsWith("show:") ? "Plays the saved show's effects in order, with its crossfades." : (fx ? fx.description + (fx.tree ? " (also plays on the tree)" : "") : "");
     optionFields($("audOpts"), v.startsWith("show:") ? null : fx, audOpts);
     $("audSecsRow").hidden = !v.startsWith("show:");
   }
@@ -83,8 +84,8 @@ const Preview = (() => {
   $("audStop").onclick = () => api("POST", "/api/audition/stop").catch((e) => showMsg("audErr", e.message));
 
   App.on("ready", async () => {
-    const px = await api("GET", "/api/pixels");
-    view = new SculptureView($("c"), px, { tooltip: $("tip") });
+    const [px, tree] = await Promise.all([api("GET", "/api/pixels"), api("GET", "/api/tree-pixels")]);
+    view = new SculptureView($("c"), px, { tooltip: $("tip"), tree });
     view.setView("iso");
     if (!$("tab-preview").hidden) connect();
   });

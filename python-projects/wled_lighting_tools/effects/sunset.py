@@ -16,6 +16,8 @@ Options (play.py -o key=value, or options: in a show entry):
                desert, tropical, purple_haze), or colors from the horizon up,
                e.g. "orange,pink,purple,navy"
   stars        on (default) / off: stars in the top two base pairs at night
+  moon         on (default) / off: on the tree strand, a moon (4-5 white lights
+               on the top of its loop) that comes out with the stars
   minutes      length of the scene; the sun sets at the halfway point (default 30)
   green_flash  on (default) / off: the green streak up the core as the sun goes
   seed         random seed (None = new each run)
@@ -32,3 +34,4 @@ def prepare(opts):
 
 
 render = _sky.render
+render_tree = _sky.render_tree

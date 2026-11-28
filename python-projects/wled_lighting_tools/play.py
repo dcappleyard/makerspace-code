@@ -7,6 +7,7 @@
     python3 play.py twinkle --also 127.0.0.1         # sculpture + preview at once
     python3 play.py ring_spin --preview --reload     # re-import the effect when its file changes
     python3 play.py dna_strand -o motion=up -o rod=white   # effect options (see the effect's OPTIONS)
+    python3 play.py sandworm --tree -o tree_chance=1       # also the tree strand (tree: in config.yaml)
 
 Streams until Ctrl-C (or --duration); WLED reverts to its own effect ~2.5 s later.
 """
@@ -17,8 +18,8 @@ import time
 from pathlib import Path
 
 import effects
-from layout import Layout
-from testpattern import load_config
+from layout import Layout, TreeLayout, tree_config
+from testpattern import default_config, load_config
 from wled.ddp import DDPSender, Streamer
 
 HERE = Path(__file__).resolve().parent
@@ -28,11 +29,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("effect", nargs="?", help="effect name (a module in effects/)")
     ap.add_argument("--list", action="store_true", help="list effects and exit")
-    ap.add_argument("--config", default=os.environ.get("WLED_CONFIG", str(HERE / "config.yaml")),
-                    help="config file (default: $WLED_CONFIG, else config.yaml here)")
+    ap.add_argument("--config", default=default_config(),
+                    help="config file (default: $WLED_CONFIG, else config.yaml here, else data/config.yaml)")
     ap.add_argument("--host", help="DDP target (default: wled.host from config)")
     ap.add_argument("--preview", action="store_true", help="send to 127.0.0.1 instead of the sculpture")
     ap.add_argument("--also", action="append", default=[], help="additional DDP target (repeatable)")
+    ap.add_argument("--tree", action="store_true",
+                    help="also play the effect's tree companion on the tree strand (tree.host from config)")
     ap.add_argument("--fps", type=float)
     ap.add_argument("--scale", type=float, default=1.0, help="brightness scale 0-1 (default 1)")
     ap.add_argument("--duration", type=float, help="stop after this many seconds")
@@ -52,7 +55,14 @@ def main():
     if a.effect not in effects.available():
         sys.exit(f"No effect '{a.effect}'. Available: {', '.join(effects.available())}")
 
-    cfg = load_config(Path(a.config)).get("wled", {})
+    full = load_config(Path(a.config))
+    cfg = full.get("wled", {})
+    tree, tc = None, None
+    if a.tree:
+        tc = tree_config(full)
+        if not tc and not a.preview:
+            sys.exit("--tree: add a tree: block with host: to config.yaml (see config.example.yaml)")
+        tree = TreeLayout.load()
     targets = ["127.0.0.1"] if a.preview else [a.host or cfg.get("host")]
     targets += a.also
     if not targets[0]:
@@ -63,15 +73,22 @@ def main():
     try:
         options = dict(effects.parse_option(o) for o in a.option)
         player = effects.Player(a.effect, Layout.load(), scale=max(0.0, min(1.0, a.scale)),
-                              reload=a.reload, options=options)
+                              reload=a.reload, options=options, tree=tree)
     except ValueError as e:
         sys.exit(str(e))
+    if a.tree and not player.has_tree:
+        print(f"  '{a.effect}' has no tree companion; the tree stays dark")
     senders = [DDPSender(h, port) for h in targets]
+    tree_sender = DDPSender(tc["host"], tc["ddp_port"]) if (tree is not None and tc and not a.preview) else None
+    if tree_sender:
+        targets.append(f"tree {tc['host']}")
 
     class Fanout:
         def send(self, data):
             for s in senders:
                 s.send(data)
+            if tree_sender:
+                tree_sender.send(player.tree_last)
 
     shown_error = [None]
 
@@ -95,7 +112,7 @@ def main():
         pass
     finally:
         st.stop()
-        for s in senders:
+        for s in senders + ([tree_sender] if tree_sender else []):
             s.close()
     if st.error:
         raise st.error

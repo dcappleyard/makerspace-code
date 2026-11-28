@@ -12,7 +12,10 @@ CHANCE = 0.45        # fraction of slots that twinkle
 
 
 def render(t, xyz, meta):
-    idx = meta.index
+    return _twinkle(t, meta.index)
+
+
+def _twinkle(t, idx):
     offset = hash01(idx, 1)                      # desync pixels
     slot_t = t * RATE + offset
     k = np.floor(slot_t).astype(np.int64)
@@ -22,3 +25,8 @@ def render(t, xyz, meta):
     env = np.sin(np.pi * f) ** 2 * peak * on
     v = BASE + (1 - BASE) * env
     return WARM * v[:, None]
+
+
+def render_tree(t, xyz, tree):
+    """Tree companion: the same twinkle, on its own pattern (offset ids)."""
+    return _twinkle(t, tree.index + 1000)

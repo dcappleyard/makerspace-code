@@ -59,3 +59,37 @@ class Layout:
     @classmethod
     def load(cls, path=None):
         return cls(pixel_map.load(path or Path(pixel_map.HERE) / "pixels.csv"))
+
+
+class TreeLayout:
+    """The tree strand (an optional add-on fixture; tree_map.py, tree_pixels.csv)
+    as numpy arrays: what an effect's render_tree() receives. Coordinates are in
+    the sculpture's world frame (inches, z up from the ground)."""
+
+    def __init__(self, rows):
+        self.n = len(rows)
+        col = lambda k, dt=None: np.array([r[k] for r in rows], dtype=dt)  # noqa: E731
+        self.index = col("index", int)
+        self.xyz = np.column_stack([col("x", float), col("y", float), col("z", float)])
+        self.x, self.y, self.z = self.xyz.T
+        self.light = col("light", int)            # 1 (base of the trunk) .. n
+        self.part = col("part")                   # "trunk" / "left" / "top" / "right"
+        self.s = col("s", float)                  # inches along the strand from light 1
+        self.pos = col("pos", float)              # 0 .. 1 along the strand
+        self.trunk = self.part == "trunk"
+        self.loop = ~self.trunk
+        self.split_light = int(self.light[self.loop].min())   # first light of the loop
+
+    @classmethod
+    def load(cls, path=None):
+        import tree_map
+        return cls(tree_map.load(path or Path(tree_map.HERE) / "tree_pixels.csv"))
+
+
+def tree_config(cfg):
+    """The machine config's optional tree: block -> {"host", "ddp_port", "api_port"}, or None."""
+    t = (cfg or {}).get("tree")
+    if not t or not t.get("host"):
+        return None
+    return {"host": str(t["host"]), "ddp_port": int(t.get("ddp_port", 4048)),
+            "api_port": int(t.get("api_port", 80))}

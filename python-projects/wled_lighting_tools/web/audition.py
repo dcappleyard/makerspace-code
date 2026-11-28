@@ -15,9 +15,10 @@ IDLE_STOP_S = 10
 
 
 class Auditioner:
-    def __init__(self, layout):
+    def __init__(self, layout, tree=None):
         self.layout = layout
-        self.mixer = Mixer(layout.n)
+        self.tree = tree             # layout.TreeLayout or None: companions show on the tree too
+        self.mixer = Mixer(layout.n, tree.n if tree is not None else 0)
         self.lock = threading.Lock()
         self.entries, self.idx = [], -1
         self.label = None
@@ -70,7 +71,7 @@ class Auditioner:
         self.error = None
         if e.kind == "effect":
             try:
-                p = effects.Player(e.name, self.layout, scale=self.scale, options=e.options)
+                p = effects.Player(e.name, self.layout, scale=self.scale, options=e.options, tree=self.tree)
             except Exception as ex:
                 self.error = f"{e.name}: {ex}"
                 self.mixer.switch(None)
@@ -115,4 +116,5 @@ class Auditioner:
                 "remaining_s": max(0, round(self.entry_end - time.monotonic())) if e else None,
                 "error": self.error or (self.mixer.cur.error if self.mixer.cur else None),
                 "frame": self.mixer.last if (self.running and self.mixer.cur is not None) else None,
+                "tree_frame": self.mixer.last_tree if (self.running and self.tree is not None) else None,
             }

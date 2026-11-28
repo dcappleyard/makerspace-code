@@ -27,6 +27,10 @@ out of one side come back in on the other (the footprint wraps around).
 `wind_direction` is a compass angle in degrees, or "random" for a new
 direction each run.
 
+Tree companion (render_tree): the tree strand gets its own flakes, in a thin
+slab around the plane of its loop, with the same options; the count is worked
+out the same way, so about `density` of its lights are lit too.
+
 Options (play.py -o key=value, or options: in a show entry):
   color           "rainbow" (default): each new flake takes the next of 256
                   rainbow steps; or a fixed color, e.g. "#d8e4ff" (white with a
@@ -101,36 +105,59 @@ def prepare(opts):
         "fall_seconds": fall, "flake_size": size,
         "sigma": SIGMA_PER_SIZE * size, "reach": max(MIN_REACH, REACH_PER_SIZE * size),
         "direction": direction, "rgb": None if str(opts["color"]).strip().lower() == "rainbow" else color(opts["color"]),
-        "_geom": None,
+        "_geom": None, "_tgeom": None,
     }
 
 
 def _geometry(opts, meta):
-    """Flake count and per-flake constants (cached in opts)."""
+    """Flake count and per-flake constants for the sculpture (cached in opts).
+    Flakes live in a square around the rod, and fade out beyond its radius."""
     g = opts["_geom"]
     if g is not None and g["n"] == meta.n:
         return g
-    seed = opts["seed"]
-    zmin, zmax = float(meta.z.min()), float(meta.z.max())
     rmax = float(meta.r.max())
-    half = rmax + EDGE                                  # flakes live in this square, wrapped
+    half = rmax + EDGE
+    g = _field(opts, meta.xyz, opts["seed"], center=np.zeros(2), half=np.array([half, half]),
+               shape=("disc", rmax))
+    opts["_geom"] = g
+    return g
+
+
+def _tree_geometry(opts, tree):
+    """The same for the tree strand: a box around its loop (x, z), a thin slab in y."""
+    g = opts["_tgeom"]
+    if g is not None and g["n"] == tree.n:
+        return g
+    lo, hi = tree.xyz[:, :2].min(axis=0), tree.xyz[:, :2].max(axis=0)
+    center, inner = (lo + hi) / 2, (hi - lo) / 2
+    g = _field(opts, tree.xyz, opts["seed"] + 7919, center=center, half=inner + EDGE,
+               shape=("box", center, inner))
+    opts["_tgeom"] = g
+    return g
+
+
+def _field(opts, xyz, seed, center, half, shape):
+    """Flakes over the lights at xyz, in center +/- half (x, y), wrapped."""
+    zmin, zmax = float(xyz[:, 2].min()), float(xyz[:, 2].max())
     ztop, zbot = zmax + EDGE, zmin - EDGE
+    g = {"n": len(xyz), "seed": seed, "center": center, "half": half, "shape": shape,
+         "zmin": zmin, "zmax": zmax, "ztop": ztop, "zbot": zbot}
     # How many lights does one flake in the air light, on average? Drop flakes
     # at random spots in their space (the square, from above the top to below
     # the bottom) and count; that covers the dark corners, gaps and flake size.
     cs = np.arange(CAL_SAMPLES)
-    p = np.column_stack([half * (2 * hash01(seed, cs, 21) - 1), half * (2 * hash01(seed, cs, 22) - 1),
+    p = np.column_stack([center[0] + half[0] * (2 * hash01(seed, cs, 21) - 1),
+                         center[1] + half[1] * (2 * hash01(seed, cs, 22) - 1),
                          zbot + (ztop - zbot) * hash01(seed, cs, 23)])
-    vis = _visible(p, rmax, zmin, zmax, ztop, zbot) * 0.85        # 0.85 = average flake brightness
-    lit = (_levels(p, meta.xyz, opts) * vis[:, None] > LIT_LEVEL).sum(axis=1).mean()
-    n = max(1, round(opts["density"] * meta.n / max(lit, 0.05)))
+    vis = _visible(p, g) * 0.85                                   # 0.85 = average flake brightness
+    lit = (_levels(p, xyz, opts) * vis[:, None] > LIT_LEVEL).sum(axis=1).mean()
+    n = max(1, round(opts["density"] * len(xyz) / max(lit, 0.05)))
     i = np.arange(n)
     v = (zmax - zmin) / opts["fall_seconds"]            # average falling speed, in/s
     speed = v * (1 + SPEED_SPREAD * (2 * hash01(seed, i, 1) - 1))
     sway_hz = SWAY_HZ[0] + (SWAY_HZ[1] - SWAY_HZ[0]) * hash01(seed, i, 2)
-    g = {
-        "n": meta.n, "seed": seed, "flakes": n, "half": half, "rmax": rmax,
-        "zmin": zmin, "zmax": zmax, "ztop": ztop, "zbot": zbot,
+    g.update({
+        "flakes": n,
         "speed": speed, "life": (ztop - zbot) / speed,
         "phase": hash01(seed, i, 3),
         "births_per_s": float((speed / (ztop - zbot)).sum()),   # new flakes a second, all slots
@@ -139,8 +166,7 @@ def _geometry(opts, meta):
         "sway_ph": 2 * np.pi * hash01(seed, i, 5),
         "wind": opts["wind"] * v * np.array([math.cos(opts["direction"]), math.sin(opts["direction"])]),
         "gust_ph": 2 * np.pi * float(hash01(seed, 6)),
-    }
-    opts["_geom"] = g
+    })
     return g
 
 
@@ -159,28 +185,33 @@ def _flakes(t, g):
     k = np.floor(cyc).astype(np.int64)                  # which flake this slot is on
     age = (cyc - k) * life
     i = np.arange(g["flakes"])
-    h = g["half"]
-    x0 = h * (2 * hash01(g["seed"], i, k, 11) - 1)     # a new random spot each fall
-    y0 = h * (2 * hash01(g["seed"], i, k, 12) - 1)
+    c, h = g["center"], g["half"]
+    x0 = c[0] + h[0] * (2 * hash01(g["seed"], i, k, 11) - 1)     # a new random spot each fall
+    y0 = c[1] + h[1] * (2 * hash01(g["seed"], i, k, 12) - 1)
     z = g["ztop"] - g["speed"] * age
     xy = np.column_stack([x0, y0]) + _drift(t, g) - _drift(t - age, g)
     sw = g["sway_w"] * t + g["sway_ph"]
     xy += SWAY * np.column_stack([np.sin(sw), np.sin(0.7 * sw + 1.3)])
-    xy = (xy + h) % (2 * h) - h                         # wrap around the footprint
+    xy = (xy - c + h) % (2 * h) - h + c                 # wrap around the footprint
     pos = np.column_stack([xy, z])
     # flakes are born at births_per_s on average, so counting births up to
     # this one's birth time gives each new flake the next step
     born = np.floor((t - age) * g["births_per_s"])
     hue = (born % RAINBOW_STEPS) / RAINBOW_STEPS
-    return pos, _visible(pos, g["rmax"], g["zmin"], g["zmax"], g["ztop"], g["zbot"]) * g["bright"], hue
+    return pos, _visible(pos, g) * g["bright"], hue
 
 
-def _visible(pos, rmax, zmin, zmax, ztop, zbot):
+def _visible(pos, g):
     """Fade for flakes outside the footprint or above/below the lights, (F,)."""
-    r = np.hypot(pos[:, 0], pos[:, 1])
     z = pos[:, 2]
-    return (smoothstep(rmax + EDGE, rmax, r)
-            * smoothstep(zbot, zmin, z) * smoothstep(ztop, zmax, z))
+    if g["shape"][0] == "disc":
+        rmax = g["shape"][1]
+        foot = smoothstep(rmax + EDGE, rmax, np.hypot(pos[:, 0], pos[:, 1]))
+    else:
+        _, center, inner = g["shape"]
+        out = np.maximum(np.abs(pos[:, :2] - center) - inner, 0)
+        foot = smoothstep(EDGE, 0.0, np.hypot(out[:, 0], out[:, 1]))
+    return foot * smoothstep(g["zbot"], g["zmin"], z) * smoothstep(g["ztop"], g["zmax"], z)
 
 
 def _levels(pos, xyz, opts):
@@ -197,7 +228,14 @@ def _levels(pos, xyz, opts):
 
 
 def render(t, xyz, meta, opts):
-    g = _geometry(opts, meta)
+    return _snow(t, xyz, _geometry(opts, meta), opts)
+
+
+def render_tree(t, xyz, tree, opts):
+    return _snow(t, xyz, _tree_geometry(opts, tree), opts)
+
+
+def _snow(t, xyz, g, opts):
     pos, vis, hue = _flakes(t, g)
     level = _levels(pos, xyz, opts) * vis[:, None]
     lit = level.max(axis=0)                              # overlapping flakes don't add up

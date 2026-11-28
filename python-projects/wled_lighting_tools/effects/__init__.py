@@ -21,6 +21,15 @@ prepare(opts) -> opts parses/validates them once (raise ValueError for bad
 ones) instead of on every frame. An option "seed" left at None gets a random
 value per run (printed by play.py, re-rolled by the preview's Restart), so a
 "random" effect is still a pure function of t within a run.
+
+Tree companion: the tree strand is an optional add-on fixture (machine config
+tree:, layout.TreeLayout). An effect that should also play on it defines
+
+    def render_tree(t, xyz, tree, opts)     # (tree.n, 3); opts only if OPTIONS
+
+next to render, sharing its options and prepare(), so the two halves can
+coordinate. When the Player has a tree, prepare() also gets opts["_tree"] =
+True (not shown in raw_opts). Effects without render_tree leave the tree dark.
 """
 import importlib
 import pkgutil
@@ -56,8 +65,9 @@ class Player:
     that raises keeps its last good frame, and the error is kept in .error.
     """
 
-    def __init__(self, name, layout, scale=1.0, reload=False, options=None):
+    def __init__(self, name, layout, scale=1.0, reload=False, options=None, tree=None):
         self.name, self.layout, self.scale, self.reload = name, layout, scale, reload
+        self.tree = tree             # layout.TreeLayout, or None (no tree fixture)
         self.options = dict(options or {})     # as given; defaults fill the rest
         self.mod = load(name)
         self._auto_seed = False
@@ -68,6 +78,7 @@ class Player:
         self._mtime = self._stat()
         self._next_check = 0.0
         self._last = bytes(3 * layout.n)
+        self.tree_last = bytes(3 * tree.n) if tree is not None else None   # the tree's frame (black without a companion)
 
     def _resolve(self, mod, reroll=False):
         """(merged options, prepared options) for mod; raises ValueError."""
@@ -87,7 +98,12 @@ class Player:
             old = getattr(self, "raw_opts", {}).get("seed")
             raw["seed"] = random.randrange(1 << 31) if (reroll or old is None) else old
         prep = getattr(mod, "prepare", None)
-        return raw, (prep(dict(raw)) if prep else raw)
+        if not prep:
+            return raw, raw
+        given = dict(raw)
+        if self.tree is not None and callable(getattr(mod, "render_tree", None)):
+            given["_tree"] = True
+        return raw, prep(given)
 
     def _stat(self):
         try:
@@ -109,6 +125,11 @@ class Player:
                 self.reload_error = None
             except Exception as e:                       # syntax error etc.
                 self.reload_error = f"reload failed, still running the previous version: {type(e).__name__}: {e}"
+
+    @property
+    def has_tree(self):
+        """True when this effect plays on the tree too."""
+        return self.tree is not None and callable(getattr(self.mod, "render_tree", None))
 
     @property
     def error(self):
@@ -133,7 +154,22 @@ class Player:
             a = to_frame(out, self.layout.n)
             if self.scale != 1.0:
                 a = (a * self.scale + 0.5).astype(np.uint8)
+            tree = None
+            if self.has_tree:
+                tr = self.tree
+                if self.opts is None:
+                    out = self.mod.render_tree(t, tr.xyz, tr)
+                else:
+                    out = self.mod.render_tree(t, tr.xyz, tr, self.opts)
+                b = to_frame(out, tr.n)
+                if self.scale != 1.0:
+                    b = (b * self.scale + 0.5).astype(np.uint8)
+                tree = b.tobytes()
             self._last = a.tobytes()
+            if tree is not None:
+                self.tree_last = tree
+            elif self.tree is not None and any(self.tree_last):
+                self.tree_last = bytes(3 * self.tree.n)     # reloaded without a companion
             self.render_error = None
         except Exception as e:
             self.render_error = f"{type(e).__name__}: {e}"

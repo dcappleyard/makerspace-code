@@ -133,7 +133,7 @@
       const nOpts = Object.keys(e.options).length;
       const optBtn = el("button", { class: "small" + (nOpts ? " on" : ""), hidden: !(fx && fx.options) }, nOpts ? `options (${nOpts})` : "options");
       const optBox = el("div", { class: "opts", hidden: true });
-      const desc = el("div", { class: "desc", hidden: true }, fx ? fx.description : "");
+      const desc = el("div", { class: "desc", hidden: true }, fx ? fx.description + (fx.tree ? " (also plays on the tree)" : "") : "");
       optBtn.onclick = () => { optBox.hidden = !optBox.hidden; desc.hidden = optBox.hidden; };
       optionFields(optBox, fx, e.options, markDirty);
 

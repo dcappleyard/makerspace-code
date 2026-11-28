@@ -2,7 +2,7 @@
 
 Working spec for `wled_lighting_tools/`. This is the document to revise before and during the build; `CLAUDE.md` in this folder is a short summary that points here.
 
-Status: milestones 1–6 built (6 not yet run on the sculpture). **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". **Deployed on the Pi 5 in Docker (2026-11-13)**; first scheduled evening on the sculpture still to check.
+Status: milestones 1–8 built (6 not yet run on the sculpture; 8, the tree add-on, not yet run on the tree). **Bench check on the sculpture passed (2026-11-11)** — see "Hardware bench results". **Deployed on the Pi 5 in Docker (2026-11-13)**; first scheduled evening on the sculpture still to check.
 
 ## Goal
 
@@ -410,6 +410,33 @@ Decided 2026-11-13:
   - A disk change while the page has unsaved edits brings up the keep/take prompt.
 - **Docker (done 2026-11-13):** the Pi's `data/config.yaml` was split; the container runs from the mounted `/program/program.yaml`, files stay owned by `pi-admin`, and a change on disk (`touch`) reloads in the container within ~2 s without a restart. Still to see: a real `git pull` of a program change.
 
+## The tree add-on (milestone 8)
+
+**Hardware.** A second Dig-Uno (`wled-tree`, 192.168.20.200) drives one 100 px strand, the same WS2811 lights as the sculpture, on GPIO 2 (segment 0). It's on a tree about 3 ft to the left of the sculpture. Light 1 is at the base of the trunk. The strand runs up the trunk to a split at ~2.5 ft, then round a rounded triangle (~6 ft edges, standing on its point): up the left side, across the top, and down the right side, with light 100 back at the split. It's a hand install, so it changes from year to year. The sculpture stays the primary show; the tree is an add-on that's easy to remove.
+
+**Switch.** One block in the machine config (`data/config.yaml` in Docker): `tree: {host: 192.168.20.200}` (`layout.tree_config`). Without the block, nothing changes: no tree target, players get no tree layout, sandworm never picks it, the dashboard draws no tree. Sculpture frames are byte-for-byte identical to the `wled-show-v1` tag (the last commit before the tree; checked for all 13 effects at a fixed seed).
+
+**Map** (`tree_map.py` → `tree_pixels.csv`, stdlib, like `pixel_map.py`).
+- `TREE_ANCHORS`: `(light, x from the trunk, z)` for the base, the split, the two top corners and light 100. Lights between anchors are spaced evenly along the path; the corners are rounded over `CORNER_ROUND` inches.
+- Coordinates are the sculpture's world frame (inches, z up from the ground), with the trunk at `TREE_X = -36` and the loop in the x–z plane, so heights mean the same on both.
+- Columns: `index, x, y, z, light, part` (trunk/left/top/right), `s` (inches along), `pos` (0–1). `layout.TreeLayout` loads it (masks `trunk`, `loop`; `split_light`).
+- Each year: `testpattern.py --tree step` to find the split and corners, measure roughly, set the anchors, rerun, check with `testpattern.py --tree parts`. *2026-11-27 measurements: split at light 16 (~30 in up), top-left corner light 55 (~3 ft left of the split, ~7 ft up), top-right corner light 71 (~1 ft right). The controller reports 101 LEDs; the map uses 100.*
+
+**Companions.** An effect plays on the tree too if it defines `render_tree(t, xyz, tree, opts)` next to `render` (same options, `prepare` and seed, so the halves can coordinate). The Player renders both from the same `t` (`player.tree_last`, black without a companion) and passes `_tree=True` to `prepare` when it has a tree. First round:
+- `sandworm`: a worm goes up the tree instead with chance `tree_chance` (0.2; `track=tree` forces it): up the trunk, round the loop either way, back down the trunk, at the same pace in inches as on the sculpture. One worm at a time across both, so the dark gaps are shared. Tree worms are out ~6 s, against 2–3 s on the sculpture.
+- `snow`: its own flake field in a thin slab around the tree's loop, same options and density rule.
+- `sunset` / `sunrise`: the same sky by world height and the same horizon; the trunk below it is ground; 1–2 stars on the top of the loop. Sun and green flash stay on the sculpture.
+- `twinkle`: the same twinkle on its own pattern.
+
+**Runner.**
+- The `Mixer` carries `(sculpture, tree)` frames: crossfades and the end-of-window fade cover the tree, and during a `wled:<id>` preset the sculpture gets nothing and the tree gets black.
+- The tree is streamed black all through a window when nothing on it is playing, so it stays dark without API calls and never holds a stale frame. The runner never turns it on or off; the user leaves its WLED off. At window end (and on shutdown) it gets a best-effort `{"live": false}`.
+- *To check on hardware:* that WLED shows DDP while it's off. If it doesn't, the fallback is on at window start / off at window end, like the sculpture.
+- An unreachable tree only logs (rate-limited) and never stops the sculpture. Health: `status.tree.health`, from the same 60 s check.
+- `--preview`: no tree DDP; the dashboard still draws it.
+
+**Tools and dashboard.** `testpattern.py --tree` (info, power, rgb, solid, parts, chase, step, ramp, blank); `play.py <effect> --tree`. `/api/tree-pixels`, tree frames in the live and audition streams (`tree` field), `tree: true` on `/api/effects` (the builder and audition say "also plays on the tree"). `SculptureView` takes `{tree}` and draws it beside the sculpture, with the camera framing both.
+
 ## DDP details
 
 - UDP port 4048, one packet per frame (200 × 3 = 600 bytes of data, well under one MTU).
@@ -516,3 +543,4 @@ wled_lighting_tools/
 5. **Web dashboard:** status + controls, live view, settings editor (FastAPI, in the runner process). *Status:* built 2026-11-13 (`web/`). Tested on the Pi in `--preview` mode: every control, the settings validation/save/live-apply (comments kept), the password, and the page at desktop and phone widths, rendered from a local copy of the page fed with captured API data. The headless browser here couldn't load it over HTTP. Not yet used against the sculpture.
 6. **Shows, effects and a tabbed dashboard:** `shows/` renamed to `effects/`; named shows (`shows.py`, `shows:` config section) with per-show overrides; per-window `show:` and `schedule.default_show`; crossfade between back-to-back windows with different shows; dashboard split into Scheduler / Preview / Show builder tabs with browser-only audition (`web/audition.py`). *Status:* built 2026-11-13. Verified on the Pi in `--preview` mode: a two-show config with back-to-back windows switched morning → evening with a crossfade; all commands; audition (effect, saved show, unsaved show, bad options rejected, idle stop); settings save (renaming a show updates its window, live apply keeps the current effect playing, a legacy config migrates, comments kept); each tab rendered at desktop and phone width from a local copy of the page fed captured API data. No real-browser click-through (the Chrome extension wasn't connected). Not yet run against the sculpture.
 7. **The program in git:** shows + schedule moved to the tracked `program/program.yaml` (`program.py`), machine config reduced to `wled:`/`location:`; the runner live-reloads the file and keeps the last good program on a bad one; the dashboard saves only the program file, with stale-save (409) and changed-on-disk handling; `web.config_edit split` migrates old configs; Docker mounts `./program`. *Status:* built 2026-11-13. Verified in `--preview` mode: the old layout still runs with no program file; split on a copy of the Pi config (program reads back the same, machine config left with `wled:`/`location:`, a second run refused); live reload of a hand edit in ~1.5 s with the stream and current effect kept; a conflict-marker file keeps the last program playing with the error in status/banner; an unknown effect gives a warning and is skipped; fixing the file clears it; a dashboard save writes only the program file and doesn't trigger a second reload; a stale save gets 409 and a forced save overwrites; the banner rendered via the captured-data page harness. Deployed on the Pi 2026-11-13: config split, container runs from the mounted program file, live reload confirmed in the container.
+8. **The tree add-on:** an optional second fixture (the tree strand) with companion effects. See "The tree add-on (milestone 8)". *Status:* built 2026-11-27; the last sculpture-only commit is tagged `wled-show-v1`. Verified offline and in `--preview`: companions render, sandworm never has two worms out (15 min simulated: 22 of 55 worms on the tree at chance 0.3, no overlap; none with no tree), crossfade into and out of a companion, black tree during presets and at the end-of-window fade, sculpture frames unchanged with no tree, and the dashboard API and streams carry the tree. The 3D drawing of the tree wasn't looked at in a browser (Chrome extension not connected). On the tree (2026-11-27): reachable from the Pi after a firewall fix; WLED 16.0.1 entered DDP realtime while off and released afterwards; anchors measured with `testpattern.py --tree step`. Not yet run: companions on the tree, and the runner in Docker with the tree.

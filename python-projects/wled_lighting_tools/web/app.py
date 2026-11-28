@@ -73,7 +73,11 @@ def create_app(runner):
     app = FastAPI(title="Sculpture dashboard", dependencies=[Depends(require_auth)],
                   docs_url=None, redoc_url=None, openapi_url=None)
     pixels = pixel_map.load()
-    audition = Auditioner(runner.layout)
+    audition = Auditioner(runner.layout, runner.tree)
+    tree_pixels = None
+    if runner.tree is not None:
+        import tree_map
+        tree_pixels = tree_map.load()
 
     def cfg_path():
         """The file settings are read from and saved to: the program file
@@ -118,6 +122,11 @@ def create_app(runner):
     def get_pixels():
         return pixels
 
+    @app.get("/api/tree-pixels")
+    def get_tree_pixels():
+        """The tree strand's lights (world inches, like /api/pixels), or null without a tree."""
+        return tree_pixels
+
     @app.get("/api/effects")
     def get_effects():
         out = []
@@ -125,7 +134,8 @@ def create_app(runner):
             try:
                 m = effects.load(name)
                 out.append({"name": name, "description": getattr(m, "DESCRIPTION", ""),
-                             "options": getattr(m, "OPTIONS", None)})
+                             "options": getattr(m, "OPTIONS", None),
+                             "tree": callable(getattr(m, "render_tree", None))})
             except Exception as e:
                 out.append({"name": name, "description": f"(import error: {e})", "options": None})
         return out
@@ -150,7 +160,9 @@ def create_app(runner):
                     state = "preset"
                 else:
                     state = "live" if f else "idle"
-                msg = {"state": state, "frame": base64.b64encode(f).decode() if f else None}
+                tf = runner.mixer.last_tree if (st.get("on") and runner.tree is not None) else None
+                msg = {"state": state, "frame": base64.b64encode(f).decode() if f else None,
+                       "tree": base64.b64encode(tf).decode() if tf else None}
                 if msg != last_sent:
                     yield f"data: {json.dumps(msg)}\n\n"
                     last_sent = msg
@@ -213,8 +225,10 @@ def create_app(runner):
                 while True:
                     st = audition.status()
                     f = st.pop("frame")
+                    tf = st.pop("tree_frame")
                     msg = {**st, "state": "live" if f else ("preset" if st["kind"] == "preset" else "idle"),
-                           "frame": base64.b64encode(f).decode() if f else None}
+                           "frame": base64.b64encode(f).decode() if f else None,
+                           "tree": base64.b64encode(tf).decode() if tf else None}
                     if msg != last:
                         yield f"data: {json.dumps(msg)}\n\n"
                         last = msg

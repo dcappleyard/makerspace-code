@@ -48,6 +48,39 @@ python3 play.py sunrise -o horizon=2 -o color="peach,rose,lavender,navy"
 python3 play.py sandworm -o track=center -o down=3to5 -o colors="gold,orange,crimson" -o speed=6
 ```
 
+## Tree strand (optional add-on)
+
+A second Dig-Uno drives a 100-light strand on a tree next to the sculpture: up the trunk, then round a rounded triangle back to the split. It's optional: add a block to the machine config (`config.yaml`, or `data/config.yaml` in Docker) and restart the runner.
+
+```yaml
+tree:
+  host: 192.168.20.200        # the tree's Dig-Uno
+```
+
+Delete the block to run the sculpture alone. Leave the tree's own WLED **off**. During a window the runner streams to it, and the tree stays dark except while an effect with a tree companion plays (sandworm, snow, sunset, sunrise, twinkle). The dashboard draws it next to the sculpture.
+
+**Mapping it** (each time it's put up):
+1. Find the split and the two top corners:
+   ```bash
+   python3 testpattern.py --tree step
+   ```
+   Press Enter to step, or type a number to jump.
+2. Measure roughly where those lights are, in inches: x from the trunk (+ = right, seen from the street) and height above the ground.
+3. Set `TREE_ANCHORS` in `tree_map.py`, then rerun it:
+   ```bash
+   python3 tree_map.py --svg tree_check.svg
+   ```
+4. Check the result. This should show the trunk brown, the left side blue, the top red and the right side orange:
+   ```bash
+   python3 testpattern.py --tree parts
+   ```
+
+To give an effect a tree companion, add `render_tree(t, xyz, tree, opts)` next to its `render`. It gets a `layout.TreeLayout` (`light`, `part`, `s`, `pos`, `trunk`/`loop` masks, world `x/y/z`). Try one with:
+
+```bash
+python3 play.py sandworm --tree -o tree_chance=1
+```
+
 To write a new effect, start the preview, pick the effect in the page's **Source** menu, and edit the file. The preview re-imports it on save. If the file has an error, the error shows in the page and the last good frame stays up.
 
 ## Browser preview

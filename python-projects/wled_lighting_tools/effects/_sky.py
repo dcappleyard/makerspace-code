@@ -16,6 +16,12 @@ Sunrise runs the same scene backwards (p = 1 - t / length). The green flash
 always streaks upward, in real time, whichever way the scene runs. After the
 scene's length it holds its last frame.
 
+Tree companion (render_tree): the tree strand gets the same sky by height
+(world inches, so the same horizon), with the trunk below the horizon as
+ground, a star or two on the top of its loop, and (`moon`) a moon: a group of
+4-5 white lights on the top of the loop, brightest in the middle, that comes
+out with the stars. The sun and the green flash stay on the sculpture's core.
+
 Sky colors (`color`) go from the horizon up and are the sky at the moment of
 sunset/sunrise. "random" picks one of SKY_PALETTES and varies it a little; a
 palette name picks that one; a list of colors ("orange,pink,purple,navy",
@@ -31,6 +37,7 @@ OPTIONS = {
     "horizon": 1,
     "color": "random",
     "stars": True,
+    "moon": True,
     "minutes": 30.0,
     "green_flash": True,
     "seed": None,
@@ -59,6 +66,10 @@ SUN_RZ, SUN_RR = 3.0, 6.0    # sun glow: inches along the rod, and out from it
 SUN_HALO = 12.0              # inches: the wider, dimmer halo
 SUN_TOP = 2.0                # the sun starts this far below the top light
 N_STARS = (3, 5)
+N_TREE_STARS = (1, 2)
+MOON_RGB = np.array([1.0, 0.96, 0.86])     # soft white
+MOON_LEVEL = 0.7
+MOON_SHAPE = {4: [0.55, 1.0, 1.0, 0.55], 5: [0.45, 0.85, 1.0, 0.85, 0.45]}
 STAR_LEVEL = 0.8
 FLASH_SECONDS = 1.0          # green flash: time for the streak to run up the core
 FLASH_TAIL = 12.0            # inches of fading tail behind its head
@@ -121,9 +132,10 @@ def prepare(opts, rising):
         **opts,
         "seed": seed, "horizon": horizon, "rising": rising,
         "length": 60 * _num(opts, "minutes", 0.1),
-        "stars": _flag(opts, "stars"), "green_flash": _flag(opts, "green_flash"),
+        "stars": _flag(opts, "stars"), "moon": _flag(opts, "moon"),
+        "green_flash": _flag(opts, "green_flash"),
         "pal": _palette(opts["color"], seed),
-        "_geom": None,
+        "_geom": None, "_tgeom": None,
     }
 
 
@@ -181,23 +193,42 @@ def _sky(p, s, pal):
     return twilight + (night - twilight) * smoothstep(0.35, 0.95, q)
 
 
+def _scene(t, opts):
+    """Scene clock p (0..1, written as a sunset)."""
+    p = min(max(t / opts["length"], 0.0), 1.0)
+    return 1.0 - p if opts["rising"] else p
+
+
+def _stars(t, g, p):
+    """Star levels (S,) at time t, or None while there are none."""
+    a = smoothstep(0.6, 0.8, p)
+    if a <= 0:
+        return None
+    tw = 0.65 + 0.2 * np.sin(g["star_hz"][:, 0] * 2 * np.pi * t + g["star_ph"][:, 0]) \
+              + 0.15 * np.sin(g["star_hz"][:, 1] * 5.3 * t + g["star_ph"][:, 1])
+    return STAR_LEVEL * a * tw
+
+
+def _ground(p, opts, zh, z):
+    """Ground colors for lights at heights z (below the horizon zh)."""
+    daylight = 1 - smoothstep(0.4, 0.75, p)
+    near = np.clip(1 - (zh - z) / 6.0, 0, 1)[:, None]
+    warm = math.exp(-((p - 0.5) / 0.12) ** 2)
+    return (GROUND_NIGHT + (GROUND_DAY - GROUND_NIGHT) * daylight
+            + opts["pal"][0] * 0.1 * warm * near)
+
+
 def render(t, xyz, meta, opts):
     g = _geometry(opts, meta)
     T = opts["length"]
-    p = min(max(t / T, 0.0), 1.0)
-    if opts["rising"]:
-        p = 1.0 - p
+    p = _scene(t, opts)
     zh, zmax, sky = g["zh"], g["zmax"], g["sky"]
 
     out = np.zeros((meta.n, 3))
     out[sky] = _sky(p, g["s"][sky], opts["pal"])
 
     # ground: dim, darker at night, with a warm glow near the horizon around the event
-    daylight = 1 - smoothstep(0.4, 0.75, p)
-    near = np.clip(1 - (zh - meta.z[~sky]) / 6.0, 0, 1)[:, None]
-    warm = math.exp(-((p - 0.5) / 0.12) ** 2)
-    out[~sky] = (GROUND_NIGHT + (GROUND_DAY - GROUND_NIGHT) * daylight
-                 + opts["pal"][0] * 0.1 * warm * near)
+    out[~sky] = _ground(p, opts, zh, meta.z[~sky])
 
     # sun: center on the rod, from just under the top down to its top touching
     # the horizon at p = 0.5, then on below
@@ -214,11 +245,8 @@ def render(t, xyz, meta, opts):
 
     # stars twinkle in during the night part of the scene
     if opts["stars"] and len(g["stars"]):
-        a = smoothstep(0.6, 0.8, p)
-        if a > 0:
-            tw = 0.65 + 0.2 * np.sin(g["star_hz"][:, 0] * 2 * np.pi * t + g["star_ph"][:, 0]) \
-                      + 0.15 * np.sin(g["star_hz"][:, 1] * 5.3 * t + g["star_ph"][:, 1])
-            lvl = STAR_LEVEL * a * tw
+        lvl = _stars(t, g, p)
+        if lvl is not None:
             st = g["stars"]
             out[st] = np.maximum(out[st], g["star_rgb"] * lvl[:, None])
 
@@ -231,4 +259,63 @@ def render(t, xyz, meta, opts):
             lvl = np.where(g["core"] & sky & (behind >= 0), np.clip(1 - behind / FLASH_TAIL, 0, 1), 0.0)
             out = out + (FLASH_RGB[None, :] - out) * lvl[:, None]     # replaces the sky, so it reads green
 
+    return np.clip(out, 0, 1)
+
+
+# ---------------------------------------------------------------- tree companion
+
+def _tree_geometry(opts, tree):
+    tg = opts["_tgeom"]
+    if tg is not None and tg["n"] == tree.n:
+        return tg
+    g = opts["_geom"]
+    if g is None:                       # normally render() has run first, this frame
+        from layout import Layout
+        g = _geometry(opts, Layout.load())
+    seed = opts["seed"]
+    zh, zmax = g["zh"], g["zmax"]
+    sky = tree.z > zh
+    top = np.flatnonzero(tree.part == "top")
+    top = top[np.argsort(tree.light[top])]
+    # the moon: 4-5 neighbouring lights somewhere along the top
+    n_moon = min(len(top), 4 + int(hash01(seed, 53) < 0.5))
+    start = int(hash01(seed, 54) * (len(top) - n_moon + 1))
+    moon = top[start:start + n_moon]
+    # stars: elsewhere on the top, not next to the moon
+    cand = top[(np.arange(len(top)) < start - 1) | (np.arange(len(top)) > start + n_moon)]
+    n_st = N_TREE_STARS[0] + int(hash01(seed, 51) * (N_TREE_STARS[1] - N_TREE_STARS[0] + 1))
+    stars = cand[np.argsort(hash01(seed, cand + 1000, 52))[:n_st]]
+    tg = {
+        "n": tree.n, "zh": zh, "sky": sky,
+        "s": np.clip((tree.z - zh) / (zmax - zh), 0, 1),     # above the sculpture's top: the top color
+        "stars": stars,
+        "moon": moon, "moon_lvl": np.array(MOON_SHAPE.get(n_moon, [1.0] * n_moon)),
+        "star_rgb": np.array([[1.0, 0.95, 0.85], [0.85, 0.9, 1.0]])[(hash01(seed, stars + 1000, 43) * 2).astype(int)],
+        "star_ph": 2 * np.pi * hash01(seed, stars[:, None] + 1000, np.arange(2), 44),
+        "star_hz": 0.3 + 0.9 * hash01(seed, stars[:, None] + 1000, np.arange(2), 45),
+    }
+    opts["_tgeom"] = tg
+    return tg
+
+
+def render_tree(t, xyz, tree, opts):
+    """The same sky on the tree strand: sky by height, the trunk below the
+    horizon as ground, and a star or two on the top of the loop at night."""
+    tg = _tree_geometry(opts, tree)
+    p = _scene(t, opts)
+    sky = tg["sky"]
+    out = np.zeros((tree.n, 3))
+    out[sky] = _sky(p, tg["s"][sky], opts["pal"])
+    out[~sky] = _ground(p, opts, tg["zh"], tree.z[~sky])
+    if opts["stars"] and len(tg["stars"]):
+        lvl = _stars(t, tg, p)
+        if lvl is not None:
+            st = tg["stars"]
+            out[st] = np.maximum(out[st], tg["star_rgb"] * lvl[:, None])
+    if opts["moon"] and len(tg["moon"]):
+        a = smoothstep(0.55, 0.8, p)            # the moon comes out a little before the stars
+        if a > 0:
+            mo = tg["moon"]
+            lvl = MOON_LEVEL * a * tg["moon_lvl"]
+            out[mo] = out[mo] + (MOON_RGB[None, :] - out[mo]) * lvl[:, None]
     return np.clip(out, 0, 1)

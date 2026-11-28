@@ -30,15 +30,23 @@ so you can see which way it's going. After a worm is gone, the sculpture
 stays dark for `dark_min` to `dark_max` times as long as that worm was out,
 then the next one comes.
 
+Tree companion (render_tree): when the tree strand is there, each worm goes
+up the tree instead with chance `tree_chance`: up the trunk, round the loop
+(either way) and back down the trunk, at the same pace and about the same
+length in inches as on the sculpture. Only one worm is out at a time, so
+while a worm is on the tree the sculpture is dark, and the reverse.
+
 Options (play.py -o key=value, or options: in a show entry):
   speed        steps (rings) per second (default 10)
   length       average worm length in steps (default 7)
   length_sd    spread of the length (default 2)
   colors       head-to-tail colors, 2 or 3 (e.g. "gold,orange,brown");
                default None = new random colors for each worm
-  track        way up: random (default), 3to5, 5to3 or center
+  track        way up: random (default), 3to5, 5to3, center, or tree (the
+               tree every time; without a tree, the same as random)
   down         way down: any (default: random, the same way included), other
                (a different way), same (back the way it came), 3to5, 5to3 or center
+  tree_chance  chance a worm goes up the tree, when there is one (default 0.2)
   peek         chance a worm peeks before its full run (default 0.25; 0 = never)
   turn_levels  the worm crosses over at one of this many top base pairs (default 3)
   dark_min     shortest dark gap, as a multiple of the worm's time out (default 1.5)
@@ -61,6 +69,7 @@ OPTIONS = {
     "colors": None,
     "track": "random",
     "down": "any",
+    "tree_chance": 0.2,
     "peek": 0.25,
     "turn_levels": 3,
     "dark_min": 1.5,
@@ -77,6 +86,8 @@ FIRST_DARK = 1.0         # seconds of dark before the first worm
 MAX_LENGTH = 10.0
 PEEK_LEVELS = (1, 3)     # a peek turns at one of these base pairs (head 2-4 rings up)
 PEEK_WAIT = (0.6, 1.8)   # seconds of dark between a peek and its full run
+STEP_INCHES = 4.5        # one step (a ring) is a base pair's rise; the tree's steps are this many inches
+TREE_PEEK = (4, 8)       # a peek on the tree turns this many lights up the trunk
 
 
 def _num(opts, key, lo=None, hi=None):
@@ -107,9 +118,13 @@ def prepare(opts):
     dmax = _num(opts, "dark_max", 0.0)
     if dmax < dmin:
         raise ValueError(f"dark_max ({dmax}) should be at least dark_min ({dmin})")
-    track = _choice(opts, "track", ("random",) + TRACKS)
+    track = _choice(opts, "track", ("random",) + TRACKS + ("tree",))
+    tree = bool(opts.get("_tree"))
+    if track == "tree" and not tree:
+        track = "random"
     down = _choice(opts, "down", ("any", "other", "same") + TRACKS)
     peek = _num(opts, "peek", 0.0, 1.0)
+    tree_chance = _num(opts, "tree_chance", 0.0, 1.0) if tree else 0.0
     cols = opts["colors"]
     if isinstance(cols, str):
         cols = None if cols.strip().lower() in ("", "none", "random") else [c for c in cols.split(",") if c.strip()]
@@ -122,7 +137,8 @@ def prepare(opts):
         "seed": seed, "speed": speed, "length": length, "length_sd": sd,
         "turn_levels": turns, "dark_min": dmin, "dark_max": dmax,
         "track": track, "down": down, "peek": peek, "cols": cols,
-        "_geom": None, "_worms": None,
+        "tree": tree, "tree_chance": tree_chance,
+        "_geom": None, "_tgeom": None, "_worms": None,
     }
 
 
@@ -143,6 +159,36 @@ def _geometry(opts, meta):
          "inner_both": seg(inner), "rod": seg(meta.rod)}
     opts["_geom"] = g
     return g
+
+
+def _tree_geometry(opts, tree=None):
+    """The tree's lights as one-light segments: the trunk (base up) and the
+    loop (split, up the left, across, down the right), and a light's step."""
+    tg = opts["_tgeom"]
+    if tg is not None and (tree is None or tg["n"] == tree.n):
+        return tg
+    if tree is None:                    # the schedule needs it before render_tree has run
+        from layout import TreeLayout
+        tree = TreeLayout.load()
+    order = np.argsort(tree.light)
+    trunk = [np.array([i]) for i in order if tree.trunk[i]]
+    loop = [np.array([i]) for i in order if tree.loop[i]]
+    spacing = float(tree.s.max()) / max(1, tree.n - 1)
+    tg = {"n": tree.n, "trunk": trunk, "loop": loop, "step": spacing / STEP_INCHES}
+    opts["_tgeom"] = tg
+    return tg
+
+
+def _tree_path(tg, clockwise, peek=None):
+    """[(pixels, steps)] up the trunk, round the loop and back down; or, for a
+    peek, `peek` lights up the trunk and back."""
+    w = tg["step"]
+    if peek is not None:
+        up = [(px, w) for px in tg["trunk"][:max(1, min(peek, len(tg["trunk"])))]]
+        return up + up[-2::-1]
+    trunk = [(px, w) for px in tg["trunk"]]
+    loop = tg["loop"] if clockwise else tg["loop"][::-1]
+    return trunk + [(px, w) for px in loop] + trunk[::-1]
 
 
 def _path(g, up, down, L):
@@ -215,14 +261,26 @@ def _worm(opts, g, k):
     z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
     length = min(max(opts["length"] + opts["length_sd"] * z, 2.0), MAX_LENGTH)
     cols = _worm_colors(opts, k)
-    run = _appearance(opts, _path(g, up, down, L), length)
-    run.update(cols=cols, up=up, down=down, turn=L, peek=False)
+    on_tree = opts["tree"] and (opts["track"] == "tree"
+                                or (opts["track"] == "random" and hash01(seed, k, 10) < opts["tree_chance"]))
+    if on_tree:
+        tg = _tree_geometry(opts)
+        run = _appearance(opts, _tree_path(tg, hash01(seed, k, 11) < 0.5), length)
+        run.update(cols=cols, up="tree", down="tree", turn=None, peek=False, fixture="tree")
+    else:
+        run = _appearance(opts, _path(g, up, down, L), length)
+        run.update(cols=cols, up=up, down=down, turn=L, peek=False, fixture="dna")
     run["dark"] = run["out"] * (opts["dark_min"] + (opts["dark_max"] - opts["dark_min"]) * float(hash01(seed, k, 4)))
     if hash01(seed, k, 7) >= opts["peek"]:
         return [run]
-    P = PEEK_LEVELS[0] + int(hash01(seed, k, 8) * (PEEK_LEVELS[1] - PEEK_LEVELS[0] + 1))
-    pk = _appearance(opts, _path(g, up, up, min(P, nb - 1)), length)
-    pk.update(cols=cols, up=up, down=up, turn=P, peek=True)
+    if on_tree:
+        P = TREE_PEEK[0] + int(hash01(seed, k, 8) * (TREE_PEEK[1] - TREE_PEEK[0] + 1))
+        pk = _appearance(opts, _tree_path(tg, True, peek=P), length)
+        pk.update(cols=cols, up="tree", down="tree", turn=P, peek=True, fixture="tree")
+    else:
+        P = PEEK_LEVELS[0] + int(hash01(seed, k, 8) * (PEEK_LEVELS[1] - PEEK_LEVELS[0] + 1))
+        pk = _appearance(opts, _path(g, up, up, min(P, nb - 1)), length)
+        pk.update(cols=cols, up=up, down=up, turn=P, peek=True, fixture="dna")
     pk["dark"] = PEEK_WAIT[0] + (PEEK_WAIT[1] - PEEK_WAIT[0]) * float(hash01(seed, k, 9))
     return [pk, run]
 
@@ -241,13 +299,27 @@ def _schedule(opts, g, t):
 
 
 def render(t, xyz, meta, opts):
-    g = _geometry(opts, meta)
-    out = np.zeros((meta.n, 3))
-    w = _schedule(opts, g, t)
+    return _draw(t, meta.n, _schedule(opts, _geometry(opts, meta), t), opts, "dna")
+
+
+def render_tree(t, xyz, tree, opts):
+    _tree_geometry(opts, tree)
+    g = opts["_geom"]
+    if g is None:                       # normally render() has run first, this frame
+        from layout import Layout
+        g = _geometry(opts, Layout.load())
+    return _draw(t, tree.n, _schedule(opts, g, t), opts, "tree")
+
+
+def _draw(t, n_px, w, opts, fixture):
+    """The worm out at time t, if it's on this fixture."""
+    out = np.zeros((n_px, 3))
     k = bisect.bisect_right(w["start"], t) - 1
     if k < 0 or k >= len(w["info"]):
         return out
     wm = w["info"][k]
+    if wm["fixture"] != fixture:
+        return out
     age = t - w["start"][k]
     if age >= wm["out"]:
         return out                                 # dark gap
@@ -274,7 +346,7 @@ def render(t, xyz, meta, opts):
     rgb = cols[i] * (1 - (x - i))[:, None] + cols[i + 1] * (x - i)[:, None]
     lvl = np.clip(cover[lit], 0, 1) * (1 - (1 - TAIL_LEVEL) * f)
     # where the worm folds back over itself, the bit nearest the head shows
-    taken = np.zeros(meta.n, bool)
+    taken = np.zeros(n_px, bool)
     for j in np.argsort(f, kind="stable"):
         px = wm["path"][lit[j]][0]
         px = px[~taken[px]]
